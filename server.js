@@ -4,9 +4,9 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const Quiz = require('./models/Quiz'); // Assuming Quiz model is correctly defined
-
+const env = require('dotenv')
 const app = express();
-
+env.config();
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -14,7 +14,7 @@ app.use('/uploads/questions', express.static(path.join(__dirname, 'uploads/quest
 app.use('/uploads/options', express.static(path.join(__dirname, 'uploads/options')));
 
 // Connect to MongoDB
-mongoose.connect('mongodb://localhost:27017/dbquiz', {
+mongoose.connect(process.env.MONGO_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true
 })
