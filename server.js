@@ -302,16 +302,43 @@ app.get('/api/quizzes', async (req, res) => {
 // POST route to handle quiz creation
 app.post('/api/quizzes', async (req, res) => {
     try {
-        console.log('Request body:', req.body); // Add this line to log the request body
+        console.log('Request body:', req.body);
 
-        const { quizTitle, quizDescription, quizType, numberOfQuestions, quizDate, quizTime, questionTimer, questions } = req.body;
+        const {
+            quizTitle,
+            quizDescription,
+            quizType,
+            numberOfQuestions,
+            quizDate,
+            quizTime,
+            questionTimer,
+            questions,
+        } = req.body;
 
         // Validate numberOfQuestions before proceeding
         if (numberOfQuestions === undefined || typeof numberOfQuestions !== 'number') {
-            return res.status(400).json({ error: 'The numberOfQuestions field is required and must be a number.' });
+            return res
+                .status(400)
+                .json({ error: 'The numberOfQuestions field is required and must be a number.' });
         }
 
-        // Create a new Quiz instance with the provided data
+        // Validate and map questions
+        const updatedQuestions = questions.map((question) => {
+            const matchingOption = question.options.find(
+                (option) => option.text.trim() === question.correctOption.trim()
+            ); // Find the option matching the correctOption text
+
+            if (!matchingOption) {
+                throw new Error(`Invalid correctOption provided for question: "${question.question}"`);
+            }
+
+            return {
+                ...question,
+                correctOption: matchingOption.text, // Ensure correctOption matches option text
+            };
+        });
+
+        // Create a new Quiz instance with the updated questions
         const quiz = new Quiz({
             quizTitle,
             quizDescription,
@@ -320,7 +347,7 @@ app.post('/api/quizzes', async (req, res) => {
             quizDate,
             quizTime,
             questionTimer,
-            questions
+            questions: updatedQuestions, // Use validated questions
         });
 
         await quiz.save();
@@ -330,6 +357,8 @@ app.post('/api/quizzes', async (req, res) => {
         res.status(500).json({ error: 'Failed to create quiz', details: error.message });
     }
 });
+
+
 
 
 
