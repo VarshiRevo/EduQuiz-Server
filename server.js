@@ -46,36 +46,36 @@ const uploadOptionImage = multer({ storage: optionStorage });
 // Routes
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
-  
+
     try {
-      const quiz = await Quiz.findOne({
-        'credentials.username': username,
-        'credentials.password': password,
-      });
-  
-      if (!quiz) {
-        return res.status(401).json({ error: 'Invalid credentials' });
-      }
-  
-      const userCredential = quiz.credentials.find(
-        (cred) => cred.username === username && cred.password === password
-      );
-  
-      if (!userCredential) {
-        return res.status(404).json({ error: 'User not found in quiz credentials' });
-      }
-  
-      res.json({
-        message: 'Login successful',
-        quizId: quiz._id,
-        username: userCredential.username,
-      });
+        const quiz = await Quiz.findOne({
+            'credentials.username': username,
+            'credentials.password': password,
+        });
+
+        if (!quiz) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const userCredential = quiz.credentials.find(
+            (cred) => cred.username === username && cred.password === password
+        );
+
+        if (!userCredential) {
+            return res.status(404).json({ error: 'User not found in quiz credentials' });
+        }
+
+        res.json({
+            message: 'Login successful',
+            quizId: quiz._id,
+            username: userCredential.username,
+        });
     } catch (error) {
-      console.error('Login error:', error);
-      res.status(500).json({ error: 'An error occurred while logging in' });
+        console.error('Login error:', error);
+        res.status(500).json({ error: 'An error occurred while logging in' });
     }
-  });
-  
+});
+
 
 app.post('/api/quizzes/:quizId/users/:username/profile', async (req, res) => {
     const { quizId, username } = req.params;
@@ -136,7 +136,8 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
         }
 
         console.log(`Checking credentials for username: ${username}`);
-        console.log('Quiz credentials:', quiz.credentials);
+        console.log('User responses:', responses);
+        console.log('Quiz questions:', quiz.questions);
 
         // Check if the username exists in the quiz's credentials
         const userCredential = quiz.credentials.find((cred) => cred.username === username);
@@ -151,6 +152,27 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
             return res.status(400).json({ error: 'Test already submitted' });
         }
 
+        // Calculate the number of correct answers
+        let correctAnswers = 0;
+
+        responses.forEach((response) => {
+            const question = quiz.questions[response.questionIndex];
+            if (!question) return;
+
+            // Compare user's answer (index) with the correct option index
+            const correctOptionIndex = question.options.findIndex(
+                (option) => option.text.trim() === question.correctOption.trim()
+            );
+
+            if (response.answer === correctOptionIndex) {
+                correctAnswers += 1;
+            }
+        });
+
+        // Calculate percentage and determine if the user passes
+        const percentage = (correctAnswers / quiz.questions.length) * 100;
+        const isPass = percentage >= quiz.passPercentage;
+
         // Save the user response
         quiz.userResponses.push({
             username,
@@ -158,9 +180,13 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
             completed: true,
             submittedAt: new Date(),
             totalTimeSpent,
+            correctAnswers,
+            percentage,
+            isPass,
         });
 
         await quiz.save();
+
         console.log(`Test submitted successfully for username: ${username}`);
         res.status(200).json({ message: 'Test submitted successfully!' });
     } catch (error) {
@@ -168,6 +194,40 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
         res.status(500).json({ error: 'Error submitting test' });
     }
 });
+
+
+app.get('/api/quizzes/:quizId/results', async (req, res) => {
+    try {
+        const { quizId } = req.params;
+        const quiz = await Quiz.findById(quizId);
+        if (!quiz) {
+            return res.status(404).json({ error: 'Quiz not found' });
+        }
+
+        // Combine user responses with user profile data
+        const results = quiz.userResponses.map((response) => {
+            const userProfile = quiz.userProfiles.find(profile => profile.username === response.username);
+            return {
+                username: response.username,
+                name: userProfile?.name || 'N/A',
+                email: userProfile?.email || 'N/A',
+                completed: response.completed,
+                isPass: response.isPass,
+                correctAnswers: response.correctAnswers,
+                percentage: response.percentage,
+                totalTimeSpent: response.totalTimeSpent,
+            };
+        });
+
+        res.json(results);
+    } catch (error) {
+        console.error('Error fetching results:', error);
+        res.status(500).json({ error: 'Error fetching results' });
+    }
+});
+
+
+
 
 
 
@@ -301,6 +361,7 @@ app.post('/api/quizzes', async (req, res) => {
             quizTitle,
             quizDescription,
             quizType,
+            passPercentage,
             numberOfQuestions,
             quizDate,
             quizTime,
@@ -336,6 +397,7 @@ app.post('/api/quizzes', async (req, res) => {
             quizTitle,
             quizDescription,
             quizType,
+            passPercentage,
             numberOfQuestions,
             quizDate,
             quizTime,
@@ -415,7 +477,7 @@ app.get('/api/quizzes/:id', async (req, res) => {
             return res.status(404).json({ error: 'Quiz not found' });
         }
         res.json(quiz,
-            );
+        );
     } catch (err) {
         res.status(500).json({ error: 'Error fetching quiz' });
     }
