@@ -106,29 +106,21 @@ app.post('/api/quizzes/:quizId/users/:username/profile', async (req, res) => {
 
 
 app.get('/api/quizzes/:quizId/users/:username/profile', async (req, res) => {
-    const { quizId, username } = req.params;
-
     try {
-        console.log(`Fetching profile for quizId: ${quizId}, username: ${username}`);  // Log parameters
-
+        const { quizId, username } = req.params;
         const quiz = await Quiz.findById(quizId);
-        if (!quiz) {
-            console.warn('Quiz not found');
-            return res.status(404).json({ error: 'Quiz not found' });
-        }
+        if (!quiz) return res.status(404).json({ error: 'Quiz not found' });
 
         const userProfile = quiz.userProfiles.find((profile) => profile.username === username);
-        if (!userProfile) {
-            console.warn(`Profile not found for username: ${username}`);
-            return res.status(404).json({ error: 'Profile not found for this username' });
-        }
+        if (!userProfile) return res.status(404).json({ error: 'Profile not found' });
 
-        res.json(userProfile);
+        res.json(userProfile); // Ensure this returns all fields
     } catch (error) {
-        console.error('Error fetching user profile:', error);  // Detailed logging
-        res.status(500).json({ error: 'Error fetching user profile', details: error.message });
+        console.error('Error fetching user profile:', error);
+        res.status(500).json({ error: 'Server error' });
     }
 });
+
 
 app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
     const { quizId, username } = req.params;
@@ -300,6 +292,7 @@ app.get('/api/quizzes', async (req, res) => {
 
 // POST route to handle quiz creation
 // POST route to handle quiz creation
+// POST route to handle quiz creation
 app.post('/api/quizzes', async (req, res) => {
     try {
         console.log('Request body:', req.body);
@@ -357,7 +350,6 @@ app.post('/api/quizzes', async (req, res) => {
         res.status(500).json({ error: 'Failed to create quiz', details: error.message });
     }
 });
-
 
 
 
@@ -422,7 +414,8 @@ app.get('/api/quizzes/:id', async (req, res) => {
         if (!quiz) {
             return res.status(404).json({ error: 'Quiz not found' });
         }
-        res.json(quiz);
+        res.json(quiz,
+            );
     } catch (err) {
         res.status(500).json({ error: 'Error fetching quiz' });
     }
