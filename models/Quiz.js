@@ -46,13 +46,14 @@ const userProfileSchema = new mongoose.Schema({
 
 // Define the User Quiz Result schema (tracks individual user attempts)
 const userQuizResultSchema = new mongoose.Schema({
-  username: { type: String },  // The username of the user
-  responses: [userResponseSchema],  // Array of responses for tracking answers
-  completed: { type: Boolean, default: false },  // Whether the user completed the quiz
-  submittedAt: { type: Date },  // Time of submission
-  totalTimeSpent: { type: Number },  // Total time spent on the entire quiz
-  score: { type: Number },  // User's total score for the quiz
-  hasAttempted: { type: Boolean, default: false },  // Prevents multiple quiz attempts
+  username: { type: String, required: true },
+    responses: { type: Array, required: true }, // Array of user's answers
+    completed: { type: Boolean, default: false },
+    submittedAt: { type: Date },
+    totalTimeSpent: { type: Number },
+    correctAnswers: { type: Number, default: 0 },
+    percentage: { type: Number, default: 0 },
+    isPass: { type: Boolean, default: false },
 });
 
 // Define the Quiz schema
@@ -60,6 +61,7 @@ const quizSchema = new mongoose.Schema({
   quizTitle: { type: String },  // Title of the quiz
   quizDescription: { type: String },  // Description of the quiz
   quizType: { type: String, enum: ['hiring', 'practice'] },  // Type of quiz (hiring or practice)
+  passPercentage: { type: Number, required: true }, // Add this field
   numberOfQuestions: { type: Number, required: true },
   quizDate: { type: Date },  // Date for when the quiz is available (only for 'hiring' quizzes)
   quizTime: { type: Number },  // Total time allowed for the quiz in seconds (only for 'hiring' quizzes)
