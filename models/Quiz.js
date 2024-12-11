@@ -63,6 +63,16 @@ const quizSchema = new mongoose.Schema({
   quizType: { type: String, enum: ['hiring', 'practice'] },  // Type of quiz (hiring or practice)
   passPercentage: { type: Number, required: true }, // Add this field
   numberOfQuestions: { type: Number, required: true },
+  questionsToSet: {
+    type: Number,
+    required: true,
+    validate: {
+      validator: function (value) {
+        return value > 0;
+      },
+      message: 'questionsToSet must be a positive number',
+    },
+  },
   quizDate: { type: Date },  // Date for when the quiz is available (only for 'hiring' quizzes)
   quizTime: { type: Number },  // Total time allowed for the quiz in seconds (only for 'hiring' quizzes)
   questionTimer: { type: Number },  // Time limit per question in seconds
