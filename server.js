@@ -1,4 +1,5 @@
 const express = require('express');
+const cloudinary = require('cloudinary').v2;
 const mongoose = require('mongoose');
 const cors = require('cors');
 const multer = require('multer');
@@ -6,12 +7,20 @@ const path = require('path');
 const Quiz = require('./models/Quiz'); // Assuming Quiz model is correctly defined
 const env = require('dotenv')
 const app = express();
+
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
 env.config();
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use('/uploads/questions', express.static(path.join(__dirname, 'uploads/questions')));
-app.use('/uploads/options', express.static(path.join(__dirname, 'uploads/options')));
+
+
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGO_URI, {
@@ -21,27 +30,9 @@ mongoose.connect(process.env.MONGO_URI, {
     .then(() => console.log('Connected to MongoDB'))
     .catch((error) => console.error('Error connecting to MongoDB:', error));
 
-// Multer Storage for Question and Option Images
-const questionStorage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, 'uploads/questions/'); // Folder to store question images
-    },
-    filename: (req, file, cb) => {
-        cb(null, Date.now() + path.extname(file.originalname)); // Set unique filename
-    }
-});
 
-const optionStorage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, 'uploads/options/'); // Folder to store option images
-    },
-    filename: (req, file, cb) => {
-        cb(null, Date.now() + path.extname(file.originalname)); // Set unique filename
-    }
-});
 
-const uploadQuestionImage = multer({ storage: questionStorage });
-const uploadOptionImage = multer({ storage: optionStorage });
+
 
 // Routes
 app.post('/api/login', async (req, res) => {
@@ -152,28 +143,30 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
             return res.status(400).json({ error: 'Test already submitted' });
         }
 
-        // Calculate the number of correct answers
-        let correctAnswers = 0;
+        const { questionsToSet } = quiz;
 
+        // Validate that questionsToSet is defined and within range
+        if (!questionsToSet || questionsToSet <= 0 || questionsToSet > quiz.questions.length) {
+            return res.status(400).json({ error: 'Invalid questionsToSet value' });
+        }
+
+        // Calculate the number of correct answers based on `questionsToSet`
+        let correctAnswers = 0;
         responses.forEach((response) => {
             const question = quiz.questions[response.questionIndex];
             if (!question) return;
 
-            // Compare user's answer (index) with the correct option index
-            const correctOptionIndex = question.options.findIndex(
-                (option) => option.text.trim() === question.correctOption.trim()
-            );
-
+            const correctOptionIndex = parseInt(question.correctOption, 10); // Ensure it's a number
             if (response.answer === correctOptionIndex) {
-                correctAnswers += 1;
+                correctAnswers += 1; // Increment score if the answer is correct
             }
         });
 
         // Calculate percentage and determine if the user passes
-        const percentage = (correctAnswers / quiz.questions.length) * 100;
+        const percentage = (correctAnswers / questionsToSet) * 100; // Use `questionsToSet` for the denominator
         const isPass = percentage >= quiz.passPercentage;
 
-        // Save the user response
+        // Save the user's response and score
         quiz.userResponses.push({
             username,
             responses,
@@ -188,12 +181,19 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
         await quiz.save();
 
         console.log(`Test submitted successfully for username: ${username}`);
-        res.status(200).json({ message: 'Test submitted successfully!' });
+        res.status(200).json({
+            message: 'Test submitted successfully!',
+            correctAnswers,
+            percentage,
+            isPass,
+        });
     } catch (error) {
+        // Log and return an error response
         console.error('Error submitting test:', error);
         res.status(500).json({ error: 'Error submitting test' });
     }
 });
+
 
 
 app.get('/api/quizzes/:quizId/results', async (req, res) => {
@@ -233,7 +233,6 @@ app.get('/api/quizzes/:quizId/results', async (req, res) => {
 
 
 
-
 app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
     const { quizId, username } = req.params;
 
@@ -241,18 +240,58 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
         const quiz = await Quiz.findById(quizId);
         if (!quiz) return res.status(404).json({ error: 'Quiz not found' });
 
-        const userResponse = quiz.userResponses.find(response => response.username === username);
+        const userResponse = quiz.userResponses.find((response) => response.username === username);
         if (userResponse && userResponse.completed) {
             return res.status(400).json({ error: 'Test already completed' });
         }
 
-        // Return quiz data only if the user hasn't completed the quiz
-        res.json(quiz);
+        const { questions, questionsToSet, quizTitle, quizDescription, questionTimer, passPercentage } = quiz;
+
+        // Validate `questionsToSet`
+        console.log('Total questions:', questions.length);
+        console.log('questionsToSet:', questionsToSet);
+        if (!questionsToSet || questionsToSet > questions.length || questionsToSet <= 0) {
+            console.error('Invalid questionsToSet value:', questionsToSet);
+            return res.status(400).json({ error: 'Invalid questionsToSet value' });
+        }
+
+
+        // Generate a deterministic random seed for each user to ensure fairness
+        let seed = username.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const seededRandom = () => {
+            const x = Math.sin(seed++) * 10000;
+            return x - Math.floor(x);
+        };
+        console.log('Random values:', Array.from({ length: 10 }, seededRandom));
+
+        // Shuffle questions using the seeded random function
+        const shuffledQuestions = questions
+            .map(question => ({ question, sortKey: seededRandom() })) // Add randomness using seededRandom
+            .sort((a, b) => a.sortKey - b.sortKey)                   // Sort by the random key
+            .map(({ question }) => question);                       // Extract shuffled questions
+
+        // Select the specified number of questions
+        const selectedQuestions = shuffledQuestions.slice(0, questionsToSet);
+
+        res.json({
+            quizTitle,
+            quizDescription,
+            questionTimer,
+            passPercentage,
+            questions: selectedQuestions,
+        });
     } catch (error) {
         console.error('Error fetching quiz:', error);
         res.status(500).json({ error: 'Error fetching quiz' });
     }
 });
+
+
+
+
+
+
+
 
 app.get('/api/quizzes/:quizId/check-access', async (req, res) => {
     const { quizId } = req.params;
@@ -314,12 +353,17 @@ app.post('/api/quizzes/:quizId/users/submit', async (req, res) => {
 
     // Calculate score based on the correct answers
     let score = 0;
-    responses.forEach((response, index) => {
-        const correctAnswer = quiz.questions[response.questionIndex].correctOption;
-        if (response.answer === correctAnswer) {
-            score += 1;  // Increment score if answer is correct
+    responses.forEach((response) => {
+        const question = quiz.questions[response.questionIndex];
+        if (!question) return;
+
+        const correctOptionIndex = parseInt(question.correctOption, 10); // Ensure it's a number
+        if (response.answer === correctOptionIndex) {
+            correctAnswers += 1; // Increment score if answer matches the correct option
         }
     });
+
+
 
     // Update the user's quiz result and mark as attempted
     quiz.userResponses.push({
@@ -353,86 +397,103 @@ app.get('/api/quizzes', async (req, res) => {
 // POST route to handle quiz creation
 // POST route to handle quiz creation
 // POST route to handle quiz creation
-app.post('/api/quizzes', async (req, res) => {
+app.post("/api/quizzes", async (req, res) => {
     try {
-        console.log('Request body:', req.body);
-
         const {
             quizTitle,
             quizDescription,
             quizType,
             passPercentage,
             numberOfQuestions,
+            questionsToSet,
             quizDate,
             quizTime,
             questionTimer,
             questions,
         } = req.body;
 
-        // Validate numberOfQuestions before proceeding
-        if (numberOfQuestions === undefined || typeof numberOfQuestions !== 'number') {
+        if (questionsToSet > numberOfQuestions) {
             return res
                 .status(400)
-                .json({ error: 'The numberOfQuestions field is required and must be a number.' });
+                .json({ error: 'questionsToSet cannot be greater than total numberOfQuestions' });
         }
+        console.log("Processing quiz creation...");
 
-        // Validate and map questions
-        const updatedQuestions = questions.map((question) => {
-            const matchingOption = question.options.find(
-                (option) => option.text.trim() === question.correctOption.trim()
-            ); // Find the option matching the correctOption text
+        // Validate each question's correctOption
+        questions.forEach((question, qIndex) => {
+            console.log("Processing question:", question.question);
 
-            if (!matchingOption) {
-                throw new Error(`Invalid correctOption provided for question: "${question.question}"`);
+            const correctIndex = question.correctOption;
+
+            if (
+                correctIndex === null ||
+                correctIndex === undefined ||
+                correctIndex < 0 ||
+                correctIndex >= question.options.length
+            ) {
+                throw new Error(
+                    `Invalid correctOption index for question: "${question.question}"`
+                );
             }
 
-            return {
-                ...question,
-                correctOption: matchingOption.text, // Ensure correctOption matches option text
-            };
+            console.log(
+                `Correct option for question "${question.question}":`,
+                question.options[correctIndex]
+            );
         });
 
-        // Create a new Quiz instance with the updated questions
+        // Save the quiz to the database
         const quiz = new Quiz({
             quizTitle,
             quizDescription,
             quizType,
             passPercentage,
             numberOfQuestions,
+            questionsToSet,
             quizDate,
             quizTime,
             questionTimer,
-            questions: updatedQuestions, // Use validated questions
+            questions,
         });
 
         await quiz.save();
-        res.status(201).json({ message: 'Quiz created successfully!', quiz });
+        res.status(201).json({ message: "Quiz created successfully!", quiz });
     } catch (error) {
-        console.error('Error creating quiz:', error);
-        res.status(500).json({ error: 'Failed to create quiz', details: error.message });
+        console.error("Error creating quiz:", error.message);
+        res.status(500).json({ error: "Failed to create quiz", details: error.message });
     }
 });
+
+
 
 
 
 
 // Upload images for questions
-app.post('/api/upload/question', uploadQuestionImage.single('image'), (req, res) => {
+app.post('/api/upload/question', upload.single('image'), async (req, res) => {
     try {
-        res.json({ imageUrl: `/uploads/questions/${req.file.filename}` });
+        const result = await cloudinary.uploader.upload_stream({ folder: 'quiz/questions' }, (error, result) => {
+            if (error) return res.status(500).json({ error: 'Failed to upload image to Cloudinary' });
+            res.json({ imageUrl: result.secure_url });
+        }).end(req.file.buffer);
     } catch (err) {
         res.status(500).json({ error: 'Failed to upload question image' });
     }
 });
 
+
 // Upload images for options
-app.post('/api/upload/option', uploadOptionImage.single('image'), (req, res) => {
+app.post('/api/upload/option', upload.single('image'), async (req, res) => {
     try {
-        res.json({ imageUrl: `/uploads/options/${req.file.filename}` });
+        const result = await cloudinary.uploader.upload_stream({ folder: 'quiz/options' }, (error, result) => {
+            if (error) return res.status(500).json({ error: 'Failed to upload image to Cloudinary' });
+            res.json({ imageUrl: result.secure_url });
+        }).end(req.file.buffer);
     } catch (err) {
         res.status(500).json({ error: 'Failed to upload option image' });
     }
 });
+
 
 // POST route to save credentials under a specific quiz
 app.post('/api/quizzes/:id/credentials', async (req, res) => {
