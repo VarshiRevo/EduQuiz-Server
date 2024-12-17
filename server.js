@@ -7,6 +7,7 @@ const path = require('path');
 const Quiz = require('./models/Quiz'); // Assuming Quiz model is correctly defined
 const env = require('dotenv')
 const app = express();
+const moment = require("moment-timezone");
 
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
@@ -31,9 +32,6 @@ mongoose.connect(process.env.MONGO_URI, {
     .catch((error) => console.error('Error connecting to MongoDB:', error));
 
 
-
-
-
 // Routes
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
@@ -56,16 +54,54 @@ app.post('/api/login', async (req, res) => {
             return res.status(404).json({ error: 'User not found in quiz credentials' });
         }
 
+        // Quiz timing validation
+        if (quiz.quizType === 'hiring') {
+            const quizDate = quiz.quizDate || ''; // Ensure quizDate is valid
+            const quizTimeInSeconds = parseInt(quiz.quizTime, 10);
+
+            // Format quiz start time
+            const hours = Math.floor(quizTimeInSeconds / 3600);
+            const minutes = Math.floor((quizTimeInSeconds % 3600) / 60);
+            const seconds = quizTimeInSeconds % 60;
+            const formattedTime = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+
+            const quizStartTime = moment.tz(`${quizDate} ${formattedTime}`, "YYYY-MM-DD HH:mm:ss", "Asia/Kolkata");
+            const quizEndTime = quizStartTime.clone().add(quiz.quizDuration, 'minutes');
+            const loginAccessStartTime = quizStartTime.clone().subtract(10, 'minutes'); // Allow login 10 mins before quiz start
+            const currentTime = moment().tz('Asia/Kolkata');
+
+            console.log("Login Start Time:", loginAccessStartTime.format());
+            console.log("Quiz Start Time:", quizStartTime.format());
+            console.log("Quiz End Time:", quizEndTime.format());
+            console.log("Current Time:", currentTime.format());
+
+            if (currentTime.isBefore(loginAccessStartTime)) {
+                return res.status(403).json({
+                    error: 'The quiz is not yet accessible. Login allowed 10 minutes before the quiz start time.',
+                });
+            }
+            if (currentTime.isAfter(quizEndTime)) {
+                return res.status(403).json({
+                    error: 'The quiz has already ended.',
+                });
+            }
+        }
+
         res.json({
             message: 'Login successful',
             quizId: quiz._id,
             username: userCredential.username,
+            quizType: quiz.quizType, 
         });
     } catch (error) {
         console.error('Login error:', error);
         res.status(500).json({ error: 'An error occurred while logging in' });
     }
 });
+
+
+  
+
 
 
 app.post('/api/quizzes/:quizId/users/:username/profile', async (req, res) => {
@@ -115,7 +151,7 @@ app.get('/api/quizzes/:quizId/users/:username/profile', async (req, res) => {
 
 app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
     const { quizId, username } = req.params;
-    const { responses, totalTimeSpent } = req.body;
+    const { responses, totalTimeSpent} = req.body;
 
     console.log(`Submit request received for quizId: ${quizId}, username: ${username}`);
 
@@ -176,6 +212,7 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
             correctAnswers,
             percentage,
             isPass,
+          
         });
 
         await quiz.save();
@@ -186,6 +223,7 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
             correctAnswers,
             percentage,
             isPass,
+
         });
     } catch (error) {
         // Log and return an error response
@@ -226,6 +264,60 @@ app.get('/api/quizzes/:quizId/results', async (req, res) => {
     }
 });
 
+app.get('/api/quizzes/:quizId', async (req, res) => {
+    try {
+        const { quizId } = req.params;
+        const quiz = await Quiz.findById(quizId);
+
+        if (!quiz) return res.status(404).json({ error: 'Quiz not found' });
+
+        const quizTimeInSeconds = parseInt(quiz.quizTime, 10) || 0;
+        let quizStartTime, quizEndTime;
+            // Validate `quizTime`
+            if (isNaN(quizTimeInSeconds)) {
+                return res.status(400).json({ error: 'Invalid quizTime format. Must be in seconds.' });
+            }
+        if (quiz.quizType === 'hiring') {
+            // Hiring quiz logic
+            const hours = Math.floor(quizTimeInSeconds / 3600);
+            const minutes = Math.floor((quizTimeInSeconds % 3600) / 60);
+            const seconds = quizTimeInSeconds % 60;
+            const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            
+            quizStartTime = moment.tz(`${quiz.quizDate} ${formattedTime}`, "YYYY-MM-DD HH:mm:ss", "Asia/Kolkata");
+            quizEndTime = quizStartTime.clone().add(quiz.quizDuration, 'minutes');
+
+            // Validate quiz timings
+            const currentTime = moment().tz("Asia/Kolkata");
+            if (currentTime < quizStartTime) {
+                return res.status(403).json({ error: 'Quiz has not started yet.' });
+            } else if (currentTime > quizEndTime) {
+                return res.status(403).json({ error: 'Quiz has ended.' });
+            }
+        } else if (quiz.quizType === 'practice') {
+            // Practice quiz logic: no start or end time validation
+            quizStartTime = null;
+            quizEndTime = null;
+        }
+
+        res.json({
+            quizTitle: quiz.quizTitle,
+            quizDescription: quiz.quizDescription,
+            quizType: quiz.quizType,
+            questionsToSet: quiz.questionsToSet,
+            timeLimit: quiz.quizDuration, // Time in minutes
+            quizStartTime: quizStartTime && quizStartTime.isValid() ? quizStartTime.toISOString() : null,
+            quizEndTime: quizEndTime && quizEndTime.isValid() ? quizEndTime.toISOString() : null,
+            bannerImageUrl: quiz.bannerImageUrl,
+            questions: quiz.questions || [], // Ensure questions array is not null
+        });
+        
+        
+    } catch (error) {
+        console.error('Error fetching quiz:', error);
+        res.status(500).json({ error: 'Failed to fetch quiz.' });
+    }
+});
 
 
 
@@ -240,51 +332,119 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
         const quiz = await Quiz.findById(quizId);
         if (!quiz) return res.status(404).json({ error: 'Quiz not found' });
 
+        const {
+            questions,
+            questionsToSet,
+            quizTitle,
+            quizDescription,
+            questionTimer,
+            passPercentage,
+            quizType,
+            quizDate,
+            quizTime,
+            quizDuration,
+        } = quiz;
+
+        console.log("Raw quizDate:", quizDate);
+        console.log("Raw quizTime:", quizTime);
+
+        let quizStartTime = null;
+        let quizEndTime = null;
+        let formattedTime = "";
+        const quizDurationInSeconds = quizDuration ? quizDuration * 60 : 0; // Convert duration to seconds
+
+        // Handle Hiring Quiz Logic
+        if (quizType === "hiring") {
+            if (!quizDate || !quizTime) {
+                return res.status(400).json({ error: "Hiring quiz requires quizDate and quizTime." });
+            }
+
+            const quizTimeInSeconds = parseInt(quizTime, 10);
+
+            // Convert quizTime to HH:MM:SS format
+            const hours = Math.floor(quizTimeInSeconds / 3600);
+            const minutes = Math.floor((quizTimeInSeconds % 3600) / 60);
+            const seconds = quizTimeInSeconds % 60;
+            formattedTime = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+
+            // Calculate Start and End Time
+            quizStartTime = moment.tz(`${quizDate} ${formattedTime}`, "YYYY-MM-DD HH:mm:ss", "Asia/Kolkata");
+            quizEndTime = quizStartTime.clone().add(quizDurationInSeconds, "seconds");
+
+            const currentTime = moment().tz("Asia/Kolkata");
+            console.log("Current Time:", currentTime.format());
+            console.log("Quiz Start Time:", quizStartTime.format());
+            console.log("Quiz End Time:", quizEndTime.format());
+
+            if (!quizStartTime.isValid() || !quizEndTime.isValid()) {
+                console.error("Invalid quiz start or end time");
+                return res.status(500).json({ error: "Failed to construct quiz start or end time." });
+            }
+
+            // Ensure quiz accessibility
+            if (currentTime.isBefore(quizStartTime)) {
+                return res.status(403).json({ error: "Quiz has not started yet." });
+            } else if (currentTime.isAfter(quizEndTime)) {
+                return res.status(403).json({ error: "Quiz has ended." });
+            }
+        }
+
+        // Handle Practice Quiz Logic
+        if (quizType === "practice") {
+            if (!questionTimer || questions.length === 0) {
+                return res.status(400).json({ error: "Invalid practice quiz settings or no questions." });
+            }
+        }
+
+        // Check if user already completed the test
         const userResponse = quiz.userResponses.find((response) => response.username === username);
         if (userResponse && userResponse.completed) {
-            return res.status(400).json({ error: 'Test already completed' });
+            return res.status(400).json({ error: "Test already completed." });
         }
 
-        const { questions, questionsToSet, quizTitle, quizDescription, questionTimer, passPercentage } = quiz;
-
-        // Validate `questionsToSet`
-        console.log('Total questions:', questions.length);
-        console.log('questionsToSet:', questionsToSet);
+        // Validate questions and questionsToSet
+        if (!questions || questions.length === 0) {
+            return res.status(400).json({ error: "No questions available for this quiz." });
+        }
         if (!questionsToSet || questionsToSet > questions.length || questionsToSet <= 0) {
-            console.error('Invalid questionsToSet value:', questionsToSet);
-            return res.status(400).json({ error: 'Invalid questionsToSet value' });
+            return res.status(400).json({ error: "Invalid questionsToSet value." });
         }
 
-
-        // Generate a deterministic random seed for each user to ensure fairness
+        // Shuffle questions using seeded random function
         let seed = username.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
         const seededRandom = () => {
             const x = Math.sin(seed++) * 10000;
             return x - Math.floor(x);
         };
-        console.log('Random values:', Array.from({ length: 10 }, seededRandom));
 
-        // Shuffle questions using the seeded random function
         const shuffledQuestions = questions
-            .map(question => ({ question, sortKey: seededRandom() })) // Add randomness using seededRandom
-            .sort((a, b) => a.sortKey - b.sortKey)                   // Sort by the random key
-            .map(({ question }) => question);                       // Extract shuffled questions
+            .map((question) => ({ question, sortKey: seededRandom() }))
+            .sort((a, b) => a.sortKey - b.sortKey)
+            .map(({ question }) => question);
 
-        // Select the specified number of questions
         const selectedQuestions = shuffledQuestions.slice(0, questionsToSet);
 
+        // Return response with conditional properties
         res.json({
             quizTitle,
             quizDescription,
-            questionTimer,
+            quizType,
             passPercentage,
+            quizDuration: quizType === "hiring" ? quizDurationInSeconds : null,
+            quizStartTime: quizStartTime ? quizStartTime.toISOString() : null,
+            quizEndTime: quizEndTime ? quizEndTime.toISOString() : null,
+            questionTimer: quizType === "practice" ? questionTimer : null,
+            quizDate: quizDate || null,
+            quizTime: formattedTime || null,
             questions: selectedQuestions,
         });
     } catch (error) {
-        console.error('Error fetching quiz:', error);
-        res.status(500).json({ error: 'Error fetching quiz' });
+        console.error("Error fetching quiz:", error.message);
+        res.status(500).json({ error: "Error fetching quiz." });
     }
 });
+
+
 
 
 
@@ -373,7 +533,9 @@ app.post('/api/quizzes/:quizId/users/submit', async (req, res) => {
         submittedAt: new Date(),
         totalTimeSpent,
         score,
-        hasAttempted: true
+        hasAttempted: true,
+     
+    
     });
 
     await quiz.save();
@@ -397,7 +559,45 @@ app.get('/api/quizzes', async (req, res) => {
 // POST route to handle quiz creation
 // POST route to handle quiz creation
 // POST route to handle quiz creation
-app.post("/api/quizzes", async (req, res) => {
+
+const convertTimeToSeconds = (timeString) => {
+    if (!timeString) return 0;
+    const [hours, minutes, seconds] = timeString.split(":").map(Number);
+    return (hours || 0) * 3600 + (minutes || 0) * 60 + (seconds || 0);
+};
+
+const validateQuiz = (req, res, next) => {
+    const { quizType, quizTitle, quizDescription, quizDate, quizTime, quizDuration, questionTimer } = req.body;
+
+    // Basic validations
+    if (!quizTitle || !quizDescription) {
+        return res.status(400).json({ error: "Quiz title and description are required." });
+    }
+
+    // Validate hiring quizzes
+    if (quizType === "hiring") {
+        if (!quizDate) {
+            return res.status(400).json({ error: "quizDate is required for hiring quizzes." });
+        }
+        if (!quizTime || !/^\d{2}:\d{2}:\d{2}$/.test(quizTime)) {
+            return res.status(400).json({ error: "quizTime is required and must be in HH:MM:SS format for hiring quizzes." });
+        }
+        if (!quizDuration || quizDuration < 1) {
+            return res.status(400).json({ error: "quizDuration is required and must be a positive integer for hiring quizzes." });
+        }
+    }
+
+    // Validate practice quizzes
+    if (quizType === "practice") {
+        if (!questionTimer || questionTimer < 1) {
+            return res.status(400).json({ error: "questionTimer is required and must be a positive integer for practice quizzes." });
+        }
+    }
+
+    next(); // Pass validation
+};
+
+app.post("/api/quizzes", validateQuiz, async (req, res) => {
     try {
         const {
             quizTitle,
@@ -408,21 +608,51 @@ app.post("/api/quizzes", async (req, res) => {
             questionsToSet,
             quizDate,
             quizTime,
+            quizDuration,
             questionTimer,
             questions,
         } = req.body;
 
+        // Check if required fields for hiring quiz type are provided
+        if (quizType === "hiring") {
+            if (!quizDate || !quizTime || !quizDuration) {
+                return res.status(400).json({
+                    error: "Hiring quizzes require quizDate, quizTime, and quizDuration to be set.",
+                });
+            }
+        }
+
+        // Check if required fields for practice quiz type are provided
+        if (quizType === "practice") {
+            if (!questionTimer || questionTimer < 1) {
+                return res.status(400).json({
+                    error: "For practice quizzes, a valid questionTimer is required.",
+                });
+            }
+        }
+
+        let quizTimeInSeconds = 0;
+        if (quizType === "hiring") {
+            // Convert quizTime to seconds for hiring quizzes
+            if (quizTime && typeof quizTime === "string") {
+                quizTimeInSeconds = convertTimeToSeconds(quizTime);
+                if (isNaN(quizTimeInSeconds)) {
+                    return res.status(400).json({ error: "Invalid quizTime format. Use HH:MM:SS." });
+                }
+            } else {
+                return res.status(400).json({ error: "quizTime is required and must be in HH:MM:SS format for hiring quizzes." });
+            }
+        }
+
+        // Validate `questionsToSet` against `numberOfQuestions`
         if (questionsToSet > numberOfQuestions) {
             return res
                 .status(400)
-                .json({ error: 'questionsToSet cannot be greater than total numberOfQuestions' });
+                .json({ error: "questionsToSet cannot be greater than total numberOfQuestions." });
         }
-        console.log("Processing quiz creation...");
 
         // Validate each question's correctOption
         questions.forEach((question, qIndex) => {
-            console.log("Processing question:", question.question);
-
             const correctIndex = question.correctOption;
 
             if (
@@ -432,14 +662,9 @@ app.post("/api/quizzes", async (req, res) => {
                 correctIndex >= question.options.length
             ) {
                 throw new Error(
-                    `Invalid correctOption index for question: "${question.question}"`
+                    `Invalid correctOption index for question: "${question.question}".`
                 );
             }
-
-            console.log(
-                `Correct option for question "${question.question}":`,
-                question.options[correctIndex]
-            );
         });
 
         // Save the quiz to the database
@@ -450,9 +675,10 @@ app.post("/api/quizzes", async (req, res) => {
             passPercentage,
             numberOfQuestions,
             questionsToSet,
-            quizDate,
-            quizTime,
-            questionTimer,
+            quizDate: quizType === "hiring" ? quizDate : null,
+            quizTime: quizType === "hiring" ? quizTimeInSeconds : null,
+            quizDuration: quizType === "hiring" ? quizDuration : null,
+            questionTimer: quizType === "practice" ? questionTimer : null,
             questions,
         });
 
@@ -464,7 +690,33 @@ app.post("/api/quizzes", async (req, res) => {
     }
 });
 
+// Helper function to convert HH:MM:SS to seconds
+app.post('/api/quizzes/:quizId/users/:username/malpractice', async (req, res) => {
+    const { quizId, username } = req.params;
+    const { malpracticeCount } = req.body;
 
+    try {
+        const quiz = await Quiz.findById(quizId);
+        if (!quiz) {
+            return res.status(404).json({ error: 'Quiz not found.' });
+        }
+
+        const userResponse = quiz.userResponses.find((response) => response.username === username);
+        if (!userResponse) {
+            return res.status(404).json({ error: 'User response not found for the quiz.' });
+        }
+
+        userResponse.malpracticeCount = malpracticeCount;
+
+        await quiz.save();
+        res.status(200).json({ message: 'Malpractice count updated successfully.' });
+    } catch (error) {
+        console.error('Error updating malpractice count:', error);
+        res.status(500).json({ error: 'Failed to update malpractice count.' });
+    }
+});
+
+  
 
 
 
