@@ -47,13 +47,15 @@ const userProfileSchema = new mongoose.Schema({
 // Define the User Quiz Result schema (tracks individual user attempts)
 const userQuizResultSchema = new mongoose.Schema({
   username: { type: String, required: true },
-    responses: { type: Array, required: true }, // Array of user's answers
-    completed: { type: Boolean, default: false },
-    submittedAt: { type: Date },
-    totalTimeSpent: { type: Number },
-    correctAnswers: { type: Number, default: 0 },
-    percentage: { type: Number, default: 0 },
-    isPass: { type: Boolean, default: false },
+  responses: { type: Array, required: true }, // Array of user's answers
+  completed: { type: Boolean, default: false },
+  submittedAt: { type: Date },
+  totalTimeSpent: { type: Number },
+  correctAnswers: { type: Number, default: 0 },
+  percentage: { type: Number, default: 0 },
+  isPass: { type: Boolean, default: false },
+  malpracticeCount: { type: Number, default: 0 }, // Track malpractice count
+  isAutoSubmit: { type: Boolean, default: false }, // Indicate auto-submission
 });
 
 // Define the Quiz schema
@@ -73,9 +75,11 @@ const quizSchema = new mongoose.Schema({
       message: 'questionsToSet must be a positive number',
     },
   },
-  quizDate: { type: Date },  // Date for when the quiz is available (only for 'hiring' quizzes)
-  quizTime: { type: Number },  // Total time allowed for the quiz in seconds (only for 'hiring' quizzes)
-  questionTimer: { type: Number },  // Time limit per question in seconds
+  quizDate: { type: String, required: function () { return this.quizType === "hiring"; } }, // Format: YYYY-MM-DD
+  quizTime: { type: String, required: function () { return this.quizType === "hiring"; } }, // Format: HH:MM
+  quizDuration: { type: Number, required: function () { return this.quizType === "hiring"; } }, // Duration in minutes
+  questionTimer: { type: Number, required: function () { return this.quizType === "practice"; } },
+  malpracticeLimit: { type: Number}, // Default limit is 3
   credentials: [{  // Array of generated credentials for quiz access
     username: { type: String },
     password: { type: String },
