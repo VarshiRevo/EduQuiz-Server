@@ -13,7 +13,12 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 env.config();
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: 'https://elevatequiz.netlify.app', // Allow your frontend URL
+    methods: ['GET', 'POST', 'PUT', 'DELETE'], // Add the methods you need
+    credentials: true, // Allow credentials if required
+  }));
+
 app.use(express.json());
 
 
