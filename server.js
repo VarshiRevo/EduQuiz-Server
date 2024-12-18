@@ -269,50 +269,70 @@ app.get('/api/quizzes/:quizId', async (req, res) => {
         const { quizId } = req.params;
         const quiz = await Quiz.findById(quizId);
 
-        if (!quiz) return res.status(404).json({ error: 'Quiz not found' });
+        if (!quiz) {
+            return res.status(404).json({ error: 'Quiz not found' });
+        }
 
         const quizTimeInSeconds = parseInt(quiz.quizTime, 10) || 0;
         let quizStartTime, quizEndTime;
-            // Validate `quizTime`
-            if (isNaN(quizTimeInSeconds)) {
-                return res.status(400).json({ error: 'Invalid quizTime format. Must be in seconds.' });
-            }
+
+        // Validate quizTime format
+        if (isNaN(quizTimeInSeconds)) {
+            return res.status(400).json({ error: 'Invalid quizTime format. Must be in seconds.' });
+        }
+
         if (quiz.quizType === 'hiring') {
             // Hiring quiz logic
             const hours = Math.floor(quizTimeInSeconds / 3600);
             const minutes = Math.floor((quizTimeInSeconds % 3600) / 60);
             const seconds = quizTimeInSeconds % 60;
+
+            // Format quizTime into "HH:mm:ss"
             const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-            
+
+            // Calculate start, end, and early access times
             quizStartTime = moment.tz(`${quiz.quizDate} ${formattedTime}`, "YYYY-MM-DD HH:mm:ss", "Asia/Kolkata");
+            const loginAccessStartTime = quizStartTime.clone().subtract(10, 'minutes'); // 10 minutes early access
             quizEndTime = quizStartTime.clone().add(quiz.quizDuration, 'minutes');
 
-            // Validate quiz timings
+            // Validate current time
             const currentTime = moment().tz("Asia/Kolkata");
-            if (currentTime < quizStartTime) {
-                return res.status(403).json({ error: 'Quiz has not started yet.' });
-            } else if (currentTime > quizEndTime) {
-                return res.status(403).json({ error: 'Quiz has ended.' });
+
+            console.log("Login Access Start Time:", loginAccessStartTime.format());
+            console.log("Quiz Start Time:", quizStartTime.format());
+            console.log("Quiz End Time:", quizEndTime.format());
+            console.log("Current Time:", currentTime.format());
+
+            if (currentTime.isBefore(loginAccessStartTime)) {
+                return res.status(403).json({
+                    error: 'The quiz is not accessible yet. Access is allowed 10 minutes before the start time.'
+                });
+            }
+
+            if (currentTime.isAfter(quizEndTime)) {
+                return res.status(403).json({
+                    error: 'The quiz has already ended.'
+                });
             }
         } else if (quiz.quizType === 'practice') {
-            // Practice quiz logic: no start or end time validation
+            // For practice quizzes, no time restrictions
             quizStartTime = null;
             quizEndTime = null;
         }
 
+        // Respond with quiz details
         res.json({
             quizTitle: quiz.quizTitle,
             quizDescription: quiz.quizDescription,
             quizType: quiz.quizType,
             questionsToSet: quiz.questionsToSet,
             timeLimit: quiz.quizDuration, // Time in minutes
-            quizStartTime: quizStartTime && quizStartTime.isValid() ? quizStartTime.toISOString() : null,
-            quizEndTime: quizEndTime && quizEndTime.isValid() ? quizEndTime.toISOString() : null,
+            quizStartTime: quizStartTime ? quizStartTime.toISOString() : null,
+            quizEndTime: quizEndTime ? quizEndTime.toISOString() : null,
             bannerImageUrl: quiz.bannerImageUrl,
-            questions: quiz.questions || [], // Ensure questions array is not null
+            questions: quiz.questions || [], // Default to empty array if questions are not provided
         });
-        
-        
+
     } catch (error) {
         console.error('Error fetching quiz:', error);
         res.status(500).json({ error: 'Failed to fetch quiz.' });
