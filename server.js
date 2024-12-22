@@ -14,10 +14,10 @@ const upload = multer({ storage });
 env.config();
 // Middleware
 app.use(cors({
-    origin: ['https://elevatequiz.netlify.app','http://localhost:5173'], // Allow your frontend URL
+    origin: ['https://elevatequiz.netlify.app', 'http://localhost:5173'], // Allow your frontend URL
     methods: ['GET', 'POST', 'PUT', 'DELETE'], // Add the methods you need
     credentials: true, // Allow credentials if required
-  }));
+}));
 app.use(express.json());
 
 
@@ -95,7 +95,7 @@ app.post('/api/login', async (req, res) => {
             message: 'Login successful',
             quizId: quiz._id,
             username: userCredential.username,
-            quizType: quiz.quizType, 
+            quizType: quiz.quizType,
         });
     } catch (error) {
         console.error('Login error:', error);
@@ -104,7 +104,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 
-  
+
 
 
 
@@ -155,7 +155,7 @@ app.get('/api/quizzes/:quizId/users/:username/profile', async (req, res) => {
 
 app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
     const { quizId, username } = req.params;
-    const { responses, totalTimeSpent} = req.body;
+    const { responses, totalTimeSpent } = req.body;
 
     console.log(`Submit request received for quizId: ${quizId}, username: ${username}`);
 
@@ -216,7 +216,7 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
             correctAnswers,
             percentage,
             isPass,
-          
+
         });
 
         await quiz.save();
@@ -567,8 +567,8 @@ app.post('/api/quizzes/:quizId/users/submit', async (req, res) => {
         totalTimeSpent,
         score,
         hasAttempted: true,
-     
-    
+
+
     });
 
     await quiz.save();
@@ -654,24 +654,28 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
                     error: "Hiring quizzes require quizDate, quizTime, and quizDuration to be set.",
                 });
             }
-            
+
         }
+        // Validate that all questions have valid sections
         if (quizType === "sectioned") {
-            const invalidSections = questions.filter(
-                (q) => !sections.includes(q.section)
+            // Validate that all questions have valid sections
+            const invalidQuestions = questions.filter(
+                (q) => !q.section || !sections.includes(q.section)
             );
-            if (invalidSections.length > 0) {
+            if (invalidQuestions.length > 0) {
                 return res.status(400).json({
                     error: "Some questions are assigned to non-existent sections.",
+                    invalidQuestions: invalidQuestions.map((q) => q.question), // Provide details for debugging
                 });
             }
-        }
-        if (quizType === "non-sectioned") {
+        } else {
+            // Default section assignment for non-sectioned quizzes
             questions.forEach((q) => {
                 if (!q.section) q.section = "default";
             });
         }
-    
+
+
 
         // Check if required fields for practice quiz type are provided
         if (quizType === "practice") {
@@ -717,14 +721,7 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
                 );
             }
         });
-        const invalidQuestions = questions.filter(
-            (q) => !sections.includes(q.section)
-        );
-        if (invalidQuestions.length > 0) {
-            return res.status(400).json({
-                error: "Some questions are assigned to non-existent sections.",
-            });
-        }
+
 
         // Save the quiz to the database
         const quiz = new Quiz({
@@ -738,7 +735,7 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
             quizTime: quizType === "hiring" ? quizTimeInSeconds : null,
             quizDuration: quizType === "hiring" ? quizDuration : null,
             questionTimer: quizType === "practice" ? questionTimer : null,
-            sections,
+            sections: quizType === "sectioned" ? sections : ["default"],
             questions,
         });
 
@@ -777,7 +774,7 @@ app.post('/api/quizzes/:quizId/users/:username/malpractice', async (req, res) =>
     }
 });
 
-  
+
 
 
 
