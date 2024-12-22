@@ -14,11 +14,10 @@ const upload = multer({ storage });
 env.config();
 // Middleware
 app.use(cors({
-    origin: 'https://elevatequiz.netlify.app', // Allow your frontend URL
+    origin: ['https://elevatequiz.netlify.app','http://localhost:5173'], // Allow your frontend URL
     methods: ['GET', 'POST', 'PUT', 'DELETE'], // Add the methods you need
     credentials: true, // Allow credentials if required
   }));
-
 app.use(express.json());
 
 
@@ -449,6 +448,13 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
 
         const selectedQuestions = shuffledQuestions.slice(0, questionsToSet);
 
+        // Group questions by sections
+        const sections = [...new Set(selectedQuestions.map((q) => q.section))];
+        const questionsBySection = sections.reduce((acc, section) => {
+            acc[section] = selectedQuestions.filter((q) => q.section === section);
+            return acc;
+        }, {});
+
         // Return response with conditional properties
         res.json({
             quizTitle,
@@ -461,13 +467,15 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
             questionTimer: quizType === "practice" ? questionTimer : null,
             quizDate: quizDate || null,
             quizTime: formattedTime || null,
-            questions: selectedQuestions,
+            sections,
+            questionsBySection,
         });
     } catch (error) {
         console.error("Error fetching quiz:", error.message);
         res.status(500).json({ error: "Error fetching quiz." });
     }
 });
+
 
 
 
@@ -635,6 +643,7 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
             quizTime,
             quizDuration,
             questionTimer,
+            sections,
             questions,
         } = req.body;
 
@@ -645,7 +654,24 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
                     error: "Hiring quizzes require quizDate, quizTime, and quizDuration to be set.",
                 });
             }
+            
         }
+        if (quizType === "sectioned") {
+            const invalidSections = questions.filter(
+                (q) => !sections.includes(q.section)
+            );
+            if (invalidSections.length > 0) {
+                return res.status(400).json({
+                    error: "Some questions are assigned to non-existent sections.",
+                });
+            }
+        }
+        if (quizType === "non-sectioned") {
+            questions.forEach((q) => {
+                if (!q.section) q.section = "default";
+            });
+        }
+    
 
         // Check if required fields for practice quiz type are provided
         if (quizType === "practice") {
@@ -691,6 +717,14 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
                 );
             }
         });
+        const invalidQuestions = questions.filter(
+            (q) => !sections.includes(q.section)
+        );
+        if (invalidQuestions.length > 0) {
+            return res.status(400).json({
+                error: "Some questions are assigned to non-existent sections.",
+            });
+        }
 
         // Save the quiz to the database
         const quiz = new Quiz({
@@ -704,6 +738,7 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
             quizTime: quizType === "hiring" ? quizTimeInSeconds : null,
             quizDuration: quizType === "hiring" ? quizDuration : null,
             questionTimer: quizType === "practice" ? questionTimer : null,
+            sections,
             questions,
         });
 
@@ -714,6 +749,7 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
         res.status(500).json({ error: "Failed to create quiz", details: error.message });
     }
 });
+
 
 // Helper function to convert HH:MM:SS to seconds
 app.post('/api/quizzes/:quizId/users/:username/malpractice', async (req, res) => {
