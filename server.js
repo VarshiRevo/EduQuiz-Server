@@ -647,18 +647,18 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
             questions,
         } = req.body;
 
-        // Check if required fields for hiring quiz type are provided
+        // Validate required fields for hiring quiz type
         if (quizType === "hiring") {
             if (!quizDate || !quizTime || !quizDuration) {
                 return res.status(400).json({
                     error: "Hiring quizzes require quizDate, quizTime, and quizDuration to be set.",
                 });
             }
-
         }
-        // Validate that all questions have valid sections
-        if (quizType === "sectioned") {
-            // Validate that all questions have valid sections
+
+        // Validate and assign sections
+        let processedQuestions = [];
+        if (sections && Array.isArray(sections)) {
             const invalidQuestions = questions.filter(
                 (q) => !q.section || !sections.includes(q.section)
             );
@@ -668,16 +668,20 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
                     invalidQuestions: invalidQuestions.map((q) => q.question), // Provide details for debugging
                 });
             }
+
+            processedQuestions = questions.map((q) => ({
+                ...q,
+                section: q.section || "default",
+            }));
         } else {
-            // Default section assignment for non-sectioned quizzes
-            questions.forEach((q) => {
-                if (!q.section) q.section = "default";
-            });
+            // Assign "default" section for non-sectioned quizzes
+            processedQuestions = questions.map((q) => ({
+                ...q,
+                section: "default",
+            }));
         }
 
-
-
-        // Check if required fields for practice quiz type are provided
+        // Validate required fields for practice quiz type
         if (quizType === "practice") {
             if (!questionTimer || questionTimer < 1) {
                 return res.status(400).json({
@@ -688,28 +692,27 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
 
         let quizTimeInSeconds = 0;
         if (quizType === "hiring") {
-            // Convert quizTime to seconds for hiring quizzes
+            // Convert quizTime to seconds
             if (quizTime && typeof quizTime === "string") {
                 quizTimeInSeconds = convertTimeToSeconds(quizTime);
                 if (isNaN(quizTimeInSeconds)) {
                     return res.status(400).json({ error: "Invalid quizTime format. Use HH:MM:SS." });
                 }
             } else {
-                return res.status(400).json({ error: "quizTime is required and must be in HH:MM:SS format for hiring quizzes." });
+                return res.status(400).json({ error: "quizTime must be in HH:MM:SS format for hiring quizzes." });
             }
         }
 
-        // Validate `questionsToSet` against `numberOfQuestions`
+        // Validate `questionsToSet`
         if (questionsToSet > numberOfQuestions) {
-            return res
-                .status(400)
-                .json({ error: "questionsToSet cannot be greater than total numberOfQuestions." });
+            return res.status(400).json({
+                error: "questionsToSet cannot be greater than total numberOfQuestions.",
+            });
         }
 
-        // Validate each question's correctOption
-        questions.forEach((question, qIndex) => {
+        // Validate `correctOption` for each question
+        processedQuestions.forEach((question) => {
             const correctIndex = question.correctOption;
-
             if (
                 correctIndex === null ||
                 correctIndex === undefined ||
@@ -722,8 +725,7 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
             }
         });
 
-
-        // Save the quiz to the database
+        // Save quiz to the database
         const quiz = new Quiz({
             quizTitle,
             quizDescription,
@@ -735,8 +737,8 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
             quizTime: quizType === "hiring" ? quizTimeInSeconds : null,
             quizDuration: quizType === "hiring" ? quizDuration : null,
             questionTimer: quizType === "practice" ? questionTimer : null,
-            sections: quizType === "sectioned" ? sections : ["default"],
-            questions,
+            sections: sections && sections.length > 0 ? sections : ["default"],
+            questions: processedQuestions,
         });
 
         await quiz.save();
@@ -746,6 +748,7 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
         res.status(500).json({ error: "Failed to create quiz", details: error.message });
     }
 });
+
 
 
 // Helper function to convert HH:MM:SS to seconds
