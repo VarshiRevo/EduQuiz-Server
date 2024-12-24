@@ -6,8 +6,22 @@ const optionSchema = new mongoose.Schema({
   image: { type: String },  // URL for an image, can be optional
 });
 
+const CodingQuestionSchema = new mongoose.Schema({
+  programSlug: { type: String, required: true, unique: true },
+  problemName: { type: String, required: true },
+  description: { type: String, required: true },
+  problemStatement: { type: String, required: true },
+  inputFormat: { type: String, required: true },
+  outputFormat: { type: String, required: true },
+  constraints: { type: String, required: true },
+  sampleInput: { type: String, required: true },
+  sampleOutput: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
 // Define the Question schema
 const questionSchema = new mongoose.Schema({
+  section: { type: String, required: true }, // New field for 
   question: { type: String },  // The question text
   questionImage: { type: String },  // URL for the question image (optional)
   options: [optionSchema],  // Array of options (optionSchema)
@@ -78,8 +92,10 @@ const quizSchema = new mongoose.Schema({
   quizDate: { type: String, required: function () { return this.quizType === "hiring"; } }, // Format: YYYY-MM-DD
   quizTime: { type: String, required: function () { return this.quizType === "hiring"; } }, // Format: HH:MM
   quizDuration: { type: Number, required: function () { return this.quizType === "hiring"; } }, // Duration in minutes
+
   questionTimer: { type: Number, required: function () { return this.quizType === "practice"; } },
-  malpracticeLimit: { type: Number}, // Default limit is 3
+  malpracticeLimit: { type: Number }, // Default limit is 3
+  sections: { type: [String], required: true }, // New field for sections
   credentials: [{  // Array of generated credentials for quiz access
     username: { type: String },
     password: { type: String },
