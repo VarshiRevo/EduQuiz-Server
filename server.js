@@ -191,16 +191,26 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
         }
 
         // Calculate the number of correct answers based on `questionsToSet`
+        // Calculate the number of correct answers and handle unanswered questions
         let correctAnswers = 0;
+        let totalQuestionsAnswered = 0;
+
         responses.forEach((response) => {
             const question = quiz.questions[response.questionIndex];
             if (!question) return;
 
             const correctOptionIndex = parseInt(question.correctOption, 10); // Ensure it's a number
-            if (response.answer === correctOptionIndex) {
-                correctAnswers += 1; // Increment score if the answer is correct
+            if (response.answer !== null) {
+                totalQuestionsAnswered += 1; // Increment answered count
+                if (response.answer === correctOptionIndex) {
+                    correctAnswers += 1; // Increment score if the answer is correct
+                }
             }
         });
+
+        // For unanswered questions, count them as incorrect (default behavior for hiring quiz)
+        // Adjust this only if necessary for practice quizzes.
+
 
         // Calculate percentage and determine if the user passes
         const percentage = (correctAnswers / questionsToSet) * 100; // Use `questionsToSet` for the denominator
@@ -267,6 +277,45 @@ app.get('/api/quizzes/:quizId/results', async (req, res) => {
         res.status(500).json({ error: 'Error fetching results' });
     }
 });
+const autoSubmitQuiz = async (quizId, username, quiz) => {
+    try {
+        const responses = quiz.questions.map((question, index) => ({
+            questionIndex: index,
+            answer: null, // Default unanswered questions to null
+        }));
+
+        // Calculate the score
+        let correctAnswers = 0;
+        responses.forEach((response) => {
+            const question = quiz.questions[response.questionIndex];
+            if (!question) return;
+
+            const correctOptionIndex = parseInt(question.correctOption, 10);
+            if (response.answer === correctOptionIndex) {
+                correctAnswers += 1;
+            }
+        });
+
+        const percentage = (correctAnswers / quiz.questions.length) * 100;
+        const isPass = percentage >= quiz.passPercentage;
+
+        // Save user response and score
+        quiz.userResponses.push({
+            username,
+            responses,
+            completed: true,
+            submittedAt: new Date(),
+            correctAnswers,
+            percentage,
+            isPass,
+        });
+
+        await quiz.save();
+        console.log(`Quiz auto-submitted successfully for username: ${username}`);
+    } catch (error) {
+        console.error('Error during auto-submission:', error);
+    }
+};
 
 app.get('/api/quizzes/:quizId', async (req, res) => {
     try {
@@ -314,10 +363,11 @@ app.get('/api/quizzes/:quizId', async (req, res) => {
             }
 
             if (currentTime.isAfter(quizEndTime)) {
-                return res.status(403).json({
-                    error: 'The quiz has already ended.'
-                });
+                console.warn(`Timer expired for quizId: ${quizId}, submitting automatically.`);
+                await autoSubmitQuiz(quizId, username, quiz); // Call a helper function to auto-submit the quiz
+                return res.status(200).json({ message: 'Quiz automatically submitted as the timer expired.' });
             }
+            
         } else if (quiz.quizType === 'practice') {
             // For practice quizzes, no time restrictions
             quizStartTime = null;
