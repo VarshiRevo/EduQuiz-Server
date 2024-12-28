@@ -39,69 +39,88 @@ mongoose.connect(process.env.MONGO_URI, {
 // Routes
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
-
+  
     try {
-        const quiz = await Quiz.findOne({
-            'credentials.username': username,
-            'credentials.password': password,
+      const quiz = await Quiz.findOne({
+        'credentials.username': username,
+        'credentials.password': password,
+      });
+  
+      if (!quiz) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+  
+      const userCredential = quiz.credentials.find(
+        (cred) => cred.username === username && cred.password === password
+      );
+  
+      if (!userCredential) {
+        return res.status(404).json({ error: 'User not found in quiz credentials' });
+      }
+  
+      // Check if the user is already logged in
+      const userResponse = quiz.userResponses.find((response) => response.username === username);
+      if (userResponse?.isLoggedIn) {
+        return res.status(403).json({ error: 'Username expired. You cannot log in again.' });
+      }
+  
+      // Quiz timing validation
+      if (quiz.quizType === 'hiring') {
+        const quizDate = quiz.quizDate || ''; // Ensure quizDate is valid
+        const quizTimeInSeconds = parseInt(quiz.quizTime, 10);
+  
+        // Format quiz start time
+        const hours = Math.floor(quizTimeInSeconds / 3600);
+        const minutes = Math.floor((quizTimeInSeconds % 3600) / 60);
+        const seconds = quizTimeInSeconds % 60;
+        const formattedTime = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  
+        const quizStartTime = moment.tz(`${quizDate} ${formattedTime}`, "YYYY-MM-DD HH:mm:ss", "Asia/Kolkata");
+        const quizEndTime = quizStartTime.clone().add(quiz.quizDuration, 'minutes');
+        const loginAccessStartTime = quizStartTime.clone().subtract(10, 'minutes'); // Allow login 10 mins before quiz start
+        const currentTime = moment().tz('Asia/Kolkata');
+  
+        console.log("Login Start Time:", loginAccessStartTime.format());
+        console.log("Quiz Start Time:", quizStartTime.format());
+        console.log("Quiz End Time:", quizEndTime.format());
+        console.log("Current Time:", currentTime.format());
+  
+        if (currentTime.isBefore(loginAccessStartTime)) {
+          return res.status(403).json({
+            error: 'The quiz is not yet accessible. Login allowed 10 minutes before the quiz start time.',
+          });
+        }
+        if (currentTime.isAfter(quizEndTime)) {
+          return res.status(403).json({
+            error: 'The quiz has already ended.',
+          });
+        }
+      }
+  
+      // Mark the user as logged in
+      if (!userResponse) {
+        quiz.userResponses.push({
+          username,
+          isLoggedIn: true,
         });
-
-        if (!quiz) {
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        const userCredential = quiz.credentials.find(
-            (cred) => cred.username === username && cred.password === password
-        );
-
-        if (!userCredential) {
-            return res.status(404).json({ error: 'User not found in quiz credentials' });
-        }
-
-        // Quiz timing validation
-        if (quiz.quizType === 'hiring') {
-            const quizDate = quiz.quizDate || ''; // Ensure quizDate is valid
-            const quizTimeInSeconds = parseInt(quiz.quizTime, 10);
-
-            // Format quiz start time
-            const hours = Math.floor(quizTimeInSeconds / 3600);
-            const minutes = Math.floor((quizTimeInSeconds % 3600) / 60);
-            const seconds = quizTimeInSeconds % 60;
-            const formattedTime = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-
-            const quizStartTime = moment.tz(`${quizDate} ${formattedTime}`, "YYYY-MM-DD HH:mm:ss", "Asia/Kolkata");
-            const quizEndTime = quizStartTime.clone().add(quiz.quizDuration, 'minutes');
-            const loginAccessStartTime = quizStartTime.clone().subtract(10, 'minutes'); // Allow login 10 mins before quiz start
-            const currentTime = moment().tz('Asia/Kolkata');
-
-            console.log("Login Start Time:", loginAccessStartTime.format());
-            console.log("Quiz Start Time:", quizStartTime.format());
-            console.log("Quiz End Time:", quizEndTime.format());
-            console.log("Current Time:", currentTime.format());
-
-            if (currentTime.isBefore(loginAccessStartTime)) {
-                return res.status(403).json({
-                    error: 'The quiz is not yet accessible. Login allowed 10 minutes before the quiz start time.',
-                });
-            }
-            if (currentTime.isAfter(quizEndTime)) {
-                return res.status(403).json({
-                    error: 'The quiz has already ended.',
-                });
-            }
-        }
-
-        res.json({
-            message: 'Login successful',
-            quizId: quiz._id,
-            username: userCredential.username,
-            quizType: quiz.quizType,
-        });
+      } else {
+        userResponse.isLoggedIn = true;
+      }
+  
+      await quiz.save();
+  
+      res.json({
+        message: 'Login successful',
+        quizId: quiz._id,
+        username: userCredential.username,
+        quizType: quiz.quizType,
+      });
     } catch (error) {
-        console.error('Login error:', error);
-        res.status(500).json({ error: 'An error occurred while logging in' });
+      console.error('Login error:', error);
+      res.status(500).json({ error: 'An error occurred while logging in' });
     }
-});
+  });
+  
 
 
 
@@ -351,11 +370,6 @@ app.get('/api/quizzes/:quizId', async (req, res) => {
             // Validate current time
             const currentTime = moment().tz("Asia/Kolkata");
 
-            console.log("Login Access Start Time:", loginAccessStartTime.format());
-            console.log("Quiz Start Time:", quizStartTime.format());
-            console.log("Quiz End Time:", quizEndTime.format());
-            console.log("Current Time:", currentTime.format());
-
             if (currentTime.isBefore(loginAccessStartTime)) {
                 return res.status(403).json({
                     error: 'The quiz is not accessible yet. Access is allowed 10 minutes before the start time.'
@@ -364,15 +378,20 @@ app.get('/api/quizzes/:quizId', async (req, res) => {
 
             if (currentTime.isAfter(quizEndTime)) {
                 console.warn(`Timer expired for quizId: ${quizId}, submitting automatically.`);
-                await autoSubmitQuiz(quizId, username, quiz); // Call a helper function to auto-submit the quiz
                 return res.status(200).json({ message: 'Quiz automatically submitted as the timer expired.' });
             }
-            
         } else if (quiz.quizType === 'practice') {
             // For practice quizzes, no time restrictions
             quizStartTime = null;
             quizEndTime = null;
         }
+
+        // Calculate sections and questions by section
+        const sections = [...new Set(quiz.questions.map((q) => q.section || 'default'))]; // Get unique sections
+        const questionsBySection = sections.reduce((acc, section) => {
+            acc[section] = quiz.questions.filter((q) => q.section === section);
+            return acc;
+        }, {});
 
         // Respond with quiz details
         res.json({
@@ -380,11 +399,14 @@ app.get('/api/quizzes/:quizId', async (req, res) => {
             quizDescription: quiz.quizDescription,
             quizType: quiz.quizType,
             questionsToSet: quiz.questionsToSet,
-            timeLimit: quiz.quizDuration, // Time in minutes
+            timeLimit: quiz.quizDuration || "Not specified", // Default value
             quizStartTime: quizStartTime ? quizStartTime.toISOString() : null,
             quizEndTime: quizEndTime ? quizEndTime.toISOString() : null,
             bannerImageUrl: quiz.bannerImageUrl,
             questions: quiz.questions || [], // Default to empty array if questions are not provided
+            sections, // Include the sections
+            questionsBySection, // Include questions grouped by sections
+
         });
 
     } catch (error) {
@@ -392,6 +414,7 @@ app.get('/api/quizzes/:quizId', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch quiz.' });
     }
 });
+
 
 
 
@@ -519,6 +542,7 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
             quizTime: formattedTime || null,
             sections,
             questionsBySection,
+            malpracticeLimit: quiz.malpracticeLimit || 3, // Default to 3 if not specified
         });
     } catch (error) {
         console.error("Error fetching quiz:", error.message);
@@ -693,6 +717,7 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
             quizTime,
             quizDuration,
             questionTimer,
+            malpracticeLimit, // Add malpracticeLimit here
             sections,
             questions,
         } = req.body;
@@ -787,6 +812,7 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
             quizTime: quizType === "hiring" ? quizTimeInSeconds : null,
             quizDuration: quizType === "hiring" ? quizDuration : null,
             questionTimer: quizType === "practice" ? questionTimer : null,
+            malpracticeLimit, // Add malpracticeLimit here
             sections: sections && sections.length > 0 ? sections : ["default"],
             questions: processedQuestions,
         });
@@ -801,31 +827,6 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
 
 
 
-// Helper function to convert HH:MM:SS to seconds
-app.post('/api/quizzes/:quizId/users/:username/malpractice', async (req, res) => {
-    const { quizId, username } = req.params;
-    const { malpracticeCount } = req.body;
-
-    try {
-        const quiz = await Quiz.findById(quizId);
-        if (!quiz) {
-            return res.status(404).json({ error: 'Quiz not found.' });
-        }
-
-        const userResponse = quiz.userResponses.find((response) => response.username === username);
-        if (!userResponse) {
-            return res.status(404).json({ error: 'User response not found for the quiz.' });
-        }
-
-        userResponse.malpracticeCount = malpracticeCount;
-
-        await quiz.save();
-        res.status(200).json({ message: 'Malpractice count updated successfully.' });
-    } catch (error) {
-        console.error('Error updating malpractice count:', error);
-        res.status(500).json({ error: 'Failed to update malpractice count.' });
-    }
-});
 
 
 
