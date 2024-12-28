@@ -37,89 +37,88 @@ mongoose.connect(process.env.MONGO_URI, {
 
 
 // Routes
+
 app.post('/api/login', async (req, res) => {
-    const { username, password } = req.body;
-  
-    try {
-      const quiz = await Quiz.findOne({
-        'credentials.username': username,
-        'credentials.password': password,
-      });
-  
-      if (!quiz) {
-        return res.status(401).json({ error: 'Invalid credentials' });
-      }
-  
-      const userCredential = quiz.credentials.find(
-        (cred) => cred.username === username && cred.password === password
-      );
-  
-      if (!userCredential) {
-        return res.status(404).json({ error: 'User not found in quiz credentials' });
-      }
-  
-      // Check if the user is already logged in
-      const userResponse = quiz.userResponses.find((response) => response.username === username);
-      if (userResponse?.isLoggedIn) {
-        return res.status(403).json({ error: 'Username expired. You cannot log in again.' });
-      }
-  
-      // Quiz timing validation
-      if (quiz.quizType === 'hiring') {
-        const quizDate = quiz.quizDate || ''; // Ensure quizDate is valid
-        const quizTimeInSeconds = parseInt(quiz.quizTime, 10);
-  
-        // Format quiz start time
-        const hours = Math.floor(quizTimeInSeconds / 3600);
-        const minutes = Math.floor((quizTimeInSeconds % 3600) / 60);
-        const seconds = quizTimeInSeconds % 60;
-        const formattedTime = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  
-        const quizStartTime = moment.tz(`${quizDate} ${formattedTime}`, "YYYY-MM-DD HH:mm:ss", "Asia/Kolkata");
-        const quizEndTime = quizStartTime.clone().add(quiz.quizDuration, 'minutes');
-        const loginAccessStartTime = quizStartTime.clone().subtract(10, 'minutes'); // Allow login 10 mins before quiz start
-        const currentTime = moment().tz('Asia/Kolkata');
-  
-        console.log("Login Start Time:", loginAccessStartTime.format());
-        console.log("Quiz Start Time:", quizStartTime.format());
-        console.log("Quiz End Time:", quizEndTime.format());
-        console.log("Current Time:", currentTime.format());
-  
-        if (currentTime.isBefore(loginAccessStartTime)) {
-          return res.status(403).json({
-            error: 'The quiz is not yet accessible. Login allowed 10 minutes before the quiz start time.',
-          });
-        }
-        if (currentTime.isAfter(quizEndTime)) {
-          return res.status(403).json({
-            error: 'The quiz has already ended.',
-          });
-        }
-      }
-  
-      // Mark the user as logged in
-      if (!userResponse) {
-        quiz.userResponses.push({
-          username,
-          isLoggedIn: true,
-        });
-      } else {
-        userResponse.isLoggedIn = true;
-      }
-  
-      await quiz.save();
-  
-      res.json({
-        message: 'Login successful',
-        quizId: quiz._id,
-        username: userCredential.username,
-        quizType: quiz.quizType,
-      });
-    } catch (error) {
-      console.error('Login error:', error);
-      res.status(500).json({ error: 'An error occurred while logging in' });
+  const { username, password } = req.body;
+
+  try {
+    const quiz = await Quiz.findOne({
+      'credentials.username': username,
+      'credentials.password': password,
+    });
+
+    if (!quiz) {
+      return res.status(401).json({ error: 'Invalid credentials' });
     }
-  });
+
+    const userCredential = quiz.credentials.find(
+      (cred) => cred.username === username && cred.password === password
+    );
+
+    if (!userCredential) {
+      return res.status(404).json({ error: 'User not found in quiz credentials' });
+    }
+
+    // Check if the user has already logged in
+    if (userCredential.isUsed) {
+      return res.status(403).json({ error: 'Username expired. You cannot log in again.' });
+    }
+
+    // Quiz timing validation
+    if (quiz.quizType === 'hiring') {
+      const quizDate = quiz.quizDate || '';
+      const quizTimeInSeconds = parseInt(quiz.quizTime, 10);
+
+      const hours = Math.floor(quizTimeInSeconds / 3600);
+      const minutes = Math.floor((quizTimeInSeconds % 3600) / 60);
+      const seconds = quizTimeInSeconds % 60;
+      const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+
+      const quizStartTime = moment.tz(`${quizDate} ${formattedTime}`, 'YYYY-MM-DD HH:mm:ss', 'Asia/Kolkata');
+      const quizEndTime = quizStartTime.clone().add(quiz.quizDuration, 'minutes');
+      const loginAccessStartTime = quizStartTime.clone().subtract(10, 'minutes');
+      const currentTime = moment().tz('Asia/Kolkata');
+
+      if (currentTime.isBefore(loginAccessStartTime)) {
+        return res.status(403).json({
+          error: 'The quiz is not yet accessible. Login allowed 10 minutes before the quiz start time.',
+        });
+      }
+      if (currentTime.isAfter(quizEndTime)) {
+        return res.status(403).json({
+          error: 'The quiz has already ended.',
+        });
+      }
+    }
+
+    // Mark the user credential as used
+    userCredential.isUsed = true;
+
+    // Mark the user as logged in
+    const userResponse = quiz.userResponses.find((response) => response.username === username);
+    if (!userResponse) {
+      quiz.userResponses.push({
+        username,
+        isLoggedIn: true,
+      });
+    } else {
+      userResponse.isLoggedIn = true;
+    }
+
+    await quiz.save();
+
+    res.json({
+      message: 'Login successful',
+      quizId: quiz._id,
+      username: userCredential.username,
+      quizType: quiz.quizType,
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'An error occurred while logging in' });
+  }
+});
+
   
 
 
@@ -440,6 +439,7 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
             quizDate,
             quizTime,
             quizDuration,
+            malpracticeLimit
         } = quiz;
 
         console.log("Raw quizDate:", quizDate);
@@ -544,6 +544,7 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
             questionsBySection,
             malpracticeLimit: quiz.malpracticeLimit || 3, // Default to 3 if not specified
         });
+        
     } catch (error) {
         console.error("Error fetching quiz:", error.message);
         res.status(500).json({ error: "Error fetching quiz." });
