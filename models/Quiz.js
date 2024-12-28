@@ -61,6 +61,7 @@ const userProfileSchema = new mongoose.Schema({
 // Define the User Quiz Result schema (tracks individual user attempts)
 const userQuizResultSchema = new mongoose.Schema({
   username: { type: String, required: true },
+  isLoggedIn: { type: Boolean, default: false },
   responses: { type: Array, required: true }, // Array of user's answers
   completed: { type: Boolean, default: false },
   submittedAt: { type: Date },
@@ -99,6 +100,7 @@ const quizSchema = new mongoose.Schema({
   credentials: [{  // Array of generated credentials for quiz access
     username: { type: String },
     password: { type: String },
+    isUsed: { type: Boolean, default: false },
   }],
   questions: [questionSchema],  // Array of questions for the quiz
   userProfiles: [userProfileSchema],  // Array of user profiles tied to this quiz
