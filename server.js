@@ -176,6 +176,7 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
     const { responses, totalTimeSpent } = req.body;
 
     console.log(`Submit request received for quizId: ${quizId}, username: ${username}`);
+    console.log('Received Responses:', JSON.stringify(responses, null, 2));
 
     try {
         const quiz = await Quiz.findById(quizId);
@@ -184,55 +185,51 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
             return res.status(404).json({ error: 'Quiz not found' });
         }
 
-        console.log(`Checking credentials for username: ${username}`);
-        console.log('User responses:', responses);
-        console.log('Quiz questions:', quiz.questions);
+        console.log(`Quiz Questions:`, JSON.stringify(quiz.questions, null, 2));
 
-        // Check if the username exists in the quiz's credentials
         const userCredential = quiz.credentials.find((cred) => cred.username === username);
         if (!userCredential) {
             console.warn(`Username ${username} not found in quiz credentials`);
             return res.status(403).json({ error: 'User is not authorized for this quiz.' });
         }
 
-        // Check if the user already submitted the quiz
         const existingResponse = quiz.userResponses.find((response) => response.username === username);
         if (existingResponse && existingResponse.completed) {
             return res.status(400).json({ error: 'Test already submitted' });
         }
 
-        const { questionsToSet } = quiz;
+        const questionsToSet = quiz.questionsToSet || quiz.questions.length; // Fallback to all questions if not set
+        const shuffledQuestions = quiz.questions.slice(0, questionsToSet); // Use the first `questionsToSet` questions
 
-        // Validate that questionsToSet is defined and within range
-        if (!questionsToSet || questionsToSet <= 0 || questionsToSet > quiz.questions.length) {
-            return res.status(400).json({ error: 'Invalid questionsToSet value' });
-        }
-
-        // Calculate the number of correct answers based on `questionsToSet`
-        // Calculate the number of correct answers and handle unanswered questions
         let correctAnswers = 0;
-        let totalQuestionsAnswered = 0;
 
+        // Validate user responses against correct options
         responses.forEach((response) => {
-            const question = quiz.questions[response.questionIndex];
+            const question = shuffledQuestions[response.questionIndex];
             if (!question) return;
 
-            const correctOptionIndex = parseInt(question.correctOption, 10); // Ensure it's a number
-            if (response.answer !== null) {
-                totalQuestionsAnswered += 1; // Increment answered count
-                if (response.answer === correctOptionIndex) {
-                    correctAnswers += 1; // Increment score if the answer is correct
-                }
+            console.log(`Validating Question: ${response.questionIndex}`);
+            console.log(`Correct Option: ${question.correctOption}`);
+            console.log(`User's Answer: ${response.answer}`);
+
+            const correctOptionIndex = question.correctOption; // Correct option is a string
+            if (response.answer !== null && response.answer === correctOptionIndex) {
+                console.log(`Answer is Correct`);
+                correctAnswers += 1; // Increment score if correct
+            } else {
+                console.log(`Answer is Incorrect`);
             }
         });
 
-        // For unanswered questions, count them as incorrect (default behavior for hiring quiz)
-        // Adjust this only if necessary for practice quizzes.
-
-
-        // Calculate percentage and determine if the user passes
-        const percentage = (correctAnswers / questionsToSet) * 100; // Use `questionsToSet` for the denominator
+        const percentage = (correctAnswers / questionsToSet) * 100; // Calculate based on `questionsToSet`
         const isPass = percentage >= quiz.passPercentage;
+
+        console.log(`Correct Answers: ${correctAnswers}`);
+        console.log(`Questions to Set: ${questionsToSet}`);
+        console.log(`Percentage: ${percentage}`);
+
+        // Remove any incomplete entry for the same user before saving
+        quiz.userResponses = quiz.userResponses.filter((response) => response.username !== username);
 
         // Save the user's response and score
         quiz.userResponses.push({
@@ -244,7 +241,6 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
             correctAnswers,
             percentage,
             isPass,
-
         });
 
         await quiz.save();
@@ -255,14 +251,25 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
             correctAnswers,
             percentage,
             isPass,
-
         });
     } catch (error) {
-        // Log and return an error response
         console.error('Error submitting test:', error);
         res.status(500).json({ error: 'Error submitting test' });
     }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
