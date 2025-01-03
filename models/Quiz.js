@@ -17,7 +17,12 @@ const codingQuestionSchema = new mongoose.Schema({
   constraints: { type: String, required: true }, // Constraints for the problem
   sampleInput: { type: String, required: true }, // Sample input for the problem
   sampleOutput: { type: String, required: true }, // Sample output for the problem
-  privateTestCases: { type: [String], required: true, default: [] }, // Array of private test cases
+  privateTestCases: [
+    {
+        input: { type: String, required: true }, // Validate `input` is a required string
+        output: { type: String, required: true }, // Validate `output` is a required string
+    },
+],
 
   section: {
     type: String,
