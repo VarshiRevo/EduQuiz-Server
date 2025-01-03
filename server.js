@@ -739,7 +739,20 @@ const validateQuiz = (req, res, next) => {
             });
         }
     }
-
+    if (codingQuestions.length > 0) {
+        for (const [index, question] of codingQuestions.entries()) {
+            if (
+                !Array.isArray(question.privateTestCases) ||
+                question.privateTestCases.some(
+                    (testCase) => !testCase.input?.trim() || !testCase.output?.trim()
+                )
+            ) {
+                return res.status(400).json({
+                    error: `Private test cases for coding question ${index + 1} must include both input and output.`,
+                });
+            }
+        }
+    }
 
     // Validate practice quizzes
     if (quizType === "practice" && !onlyCoding) {
@@ -895,9 +908,14 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
         // Assign default sections to coding questions
         const codingQuestionsWithSections = codingQuestions.map((cq) => ({
             ...cq,
-            section: sectionFeatureActive ? cq.section || "default" : "default", // Assign default section
-            image: cq.image || null, // Explicitly set the image field
+            section: sectionFeatureActive ? cq.section || "default" : "default",
+            image: cq.image || null,
+            privateTestCases: cq.privateTestCases.map((testCase) => ({
+                input: testCase.input || '',
+                output: testCase.output || '',
+            })),
         }));
+        
         
 
         // Save quiz to the database
