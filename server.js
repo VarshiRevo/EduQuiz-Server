@@ -39,87 +39,87 @@ mongoose.connect(process.env.MONGO_URI, {
 // Routes
 
 app.post('/api/login', async (req, res) => {
-  const { username, password } = req.body;
+    const { username, password } = req.body;
 
-  try {
-    const quiz = await Quiz.findOne({
-      'credentials.username': username,
-      'credentials.password': password,
-    });
-
-    if (!quiz) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    const userCredential = quiz.credentials.find(
-      (cred) => cred.username === username && cred.password === password
-    );
-
-    if (!userCredential) {
-      return res.status(404).json({ error: 'User not found in quiz credentials' });
-    }
-
-    // Check if the user has already logged in
-    if (userCredential.isUsed) {
-      return res.status(403).json({ error: 'Username expired. You cannot log in again.' });
-    }
-
-    // Quiz timing validation
-    if (quiz.quizType === 'hiring') {
-      const quizDate = quiz.quizDate || '';
-      const quizTimeInSeconds = parseInt(quiz.quizTime, 10);
-
-      const hours = Math.floor(quizTimeInSeconds / 3600);
-      const minutes = Math.floor((quizTimeInSeconds % 3600) / 60);
-      const seconds = quizTimeInSeconds % 60;
-      const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-
-      const quizStartTime = moment.tz(`${quizDate} ${formattedTime}`, 'YYYY-MM-DD HH:mm:ss', 'Asia/Kolkata');
-      const quizEndTime = quizStartTime.clone().add(quiz.quizDuration, 'minutes');
-      const loginAccessStartTime = quizStartTime.clone().subtract(10, 'minutes');
-      const currentTime = moment().tz('Asia/Kolkata');
-
-      if (currentTime.isBefore(loginAccessStartTime)) {
-        return res.status(403).json({
-          error: 'The quiz is not yet accessible. Login allowed 10 minutes before the quiz start time.',
+    try {
+        const quiz = await Quiz.findOne({
+            'credentials.username': username,
+            'credentials.password': password,
         });
-      }
-      if (currentTime.isAfter(quizEndTime)) {
-        return res.status(403).json({
-          error: 'The quiz has already ended.',
+
+        if (!quiz) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const userCredential = quiz.credentials.find(
+            (cred) => cred.username === username && cred.password === password
+        );
+
+        if (!userCredential) {
+            return res.status(404).json({ error: 'User not found in quiz credentials' });
+        }
+
+        // Check if the user has already logged in
+        if (userCredential.isUsed) {
+            return res.status(403).json({ error: 'Username expired. You cannot log in again.' });
+        }
+
+        // Quiz timing validation
+        if (quiz.quizType === 'hiring') {
+            const quizDate = quiz.quizDate || '';
+            const quizTimeInSeconds = parseInt(quiz.quizTime, 10);
+
+            const hours = Math.floor(quizTimeInSeconds / 3600);
+            const minutes = Math.floor((quizTimeInSeconds % 3600) / 60);
+            const seconds = quizTimeInSeconds % 60;
+            const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+
+            const quizStartTime = moment.tz(`${quizDate} ${formattedTime}`, 'YYYY-MM-DD HH:mm:ss', 'Asia/Kolkata');
+            const quizEndTime = quizStartTime.clone().add(quiz.quizDuration, 'minutes');
+            const loginAccessStartTime = quizStartTime.clone().subtract(10, 'minutes');
+            const currentTime = moment().tz('Asia/Kolkata');
+
+            if (currentTime.isBefore(loginAccessStartTime)) {
+                return res.status(403).json({
+                    error: 'The quiz is not yet accessible. Login allowed 10 minutes before the quiz start time.',
+                });
+            }
+            if (currentTime.isAfter(quizEndTime)) {
+                return res.status(403).json({
+                    error: 'The quiz has already ended.',
+                });
+            }
+        }
+
+        // Mark the user credential as used
+        userCredential.isUsed = true;
+
+        // Mark the user as logged in
+        const userResponse = quiz.userResponses.find((response) => response.username === username);
+        if (!userResponse) {
+            quiz.userResponses.push({
+                username,
+                isLoggedIn: true,
+            });
+        } else {
+            userResponse.isLoggedIn = true;
+        }
+
+        await quiz.save();
+
+        res.json({
+            message: 'Login successful',
+            quizId: quiz._id,
+            username: userCredential.username,
+            quizType: quiz.quizType,
         });
-      }
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ error: 'An error occurred while logging in' });
     }
-
-    // Mark the user credential as used
-    userCredential.isUsed = true;
-
-    // Mark the user as logged in
-    const userResponse = quiz.userResponses.find((response) => response.username === username);
-    if (!userResponse) {
-      quiz.userResponses.push({
-        username,
-        isLoggedIn: true,
-      });
-    } else {
-      userResponse.isLoggedIn = true;
-    }
-
-    await quiz.save();
-
-    res.json({
-      message: 'Login successful',
-      quizId: quiz._id,
-      username: userCredential.username,
-      quizType: quiz.quizType,
-    });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'An error occurred while logging in' });
-  }
 });
 
-  
+
 
 
 
@@ -551,7 +551,7 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
             questionsBySection,
             malpracticeLimit: quiz.malpracticeLimit || 3, // Default to 3 if not specified
         });
-        
+
     } catch (error) {
         console.error("Error fetching quiz:", error.message);
         res.status(500).json({ error: "Error fetching quiz." });
@@ -682,7 +682,19 @@ const convertTimeToSeconds = (timeString) => {
 };
 
 const validateQuiz = (req, res, next) => {
-    const { quizType, quizTitle, quizDescription, quizDate, quizTime, quizDuration, questionTimer } = req.body;
+    const {
+        quizType,
+        quizTitle,
+        quizDescription,
+        quizDate,
+        quizTime,
+        quizDuration,
+        questionTimer,
+        onlyCoding,
+        codingQuestions = [], // Default to an empty array if undefined
+        sections = [], // Default to an empty array if undefined
+        sectionFeatureActive = false, // Default to false if undefined
+    } = req.body;
 
     // Basic validations
     if (!quizTitle || !quizDescription) {
@@ -690,22 +702,51 @@ const validateQuiz = (req, res, next) => {
     }
 
     // Validate hiring quizzes
-    if (quizType === "hiring") {
+    if (quizType === "hiring" && !onlyCoding) {
         if (!quizDate) {
             return res.status(400).json({ error: "quizDate is required for hiring quizzes." });
         }
         if (!quizTime || !/^\d{2}:\d{2}:\d{2}$/.test(quizTime)) {
-            return res.status(400).json({ error: "quizTime is required and must be in HH:MM:SS format for hiring quizzes." });
+            return res.status(400).json({
+                error: "quizTime is required and must be in HH:MM:SS format for hiring quizzes.",
+            });
         }
         if (!quizDuration || quizDuration < 1) {
-            return res.status(400).json({ error: "quizDuration is required and must be a positive integer for hiring quizzes." });
+            return res.status(400).json({
+                error: "quizDuration is required and must be a positive integer for hiring quizzes.",
+            });
         }
     }
 
+    // Validate section assignments if section feature is active
+    // Validate section assignments if section feature is active
+    if (sectionFeatureActive && Array.isArray(sections) && sections.length > 0) {
+        if (!Array.isArray(codingQuestions) || codingQuestions.length === 0) {
+            return res.status(400).json({
+                error: "Coding questions must be provided when the section feature is active.",
+            });
+        }
+
+        // Assign default sections to missing fields
+        const validatedCodingQuestions = codingQuestions.map((cq) => ({
+            ...cq,
+            section: cq.section || "default", // Default section
+        }));
+
+        if (validatedCodingQuestions.some((cq) => !sections.includes(cq.section))) {
+            return res.status(400).json({
+                error: "All coding questions must be assigned to valid sections.",
+            });
+        }
+    }
+
+
     // Validate practice quizzes
-    if (quizType === "practice") {
+    if (quizType === "practice" && !onlyCoding) {
         if (!questionTimer || questionTimer < 1) {
-            return res.status(400).json({ error: "questionTimer is required and must be a positive integer for practice quizzes." });
+            return res.status(400).json({
+                error: "questionTimer is required and must be a positive integer for practice quizzes.",
+            });
         }
     }
 
@@ -718,6 +759,7 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
             quizTitle,
             quizDescription,
             quizType,
+            sectionFeatureActive,
             passPercentage,
             numberOfQuestions,
             questionsToSet,
@@ -725,57 +767,114 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
             quizTime,
             quizDuration,
             questionTimer,
-            malpracticeLimit, // Add malpracticeLimit here
-            sections,
-            questions,
+            malpracticeLimit,
+            sections = [],
+            questions = [],
+            codingWithQuiz,
+            onlyCoding,
+            codingTimer,
+            codingQuestions = [],
         } = req.body;
 
         // Validate required fields for hiring quiz type
         if (quizType === "hiring") {
-            if (!quizDate || !quizTime || !quizDuration) {
+            if (!quizDate || !quizTime || (!quizDuration && !onlyCoding)) {
                 return res.status(400).json({
-                    error: "Hiring quizzes require quizDate, quizTime, and quizDuration to be set.",
+                    error: "Hiring quizzes require quizDate, quizTime, and quizDuration (if not onlyCoding) to be set.",
                 });
             }
-        }
-
-        // Validate and assign sections
-        let processedQuestions = [];
-        if (sections && Array.isArray(sections)) {
-            const invalidQuestions = questions.filter(
-                (q) => !q.section || !sections.includes(q.section)
-            );
-            if (invalidQuestions.length > 0) {
-                return res.status(400).json({
-                    error: "Some questions are assigned to non-existent sections.",
-                    invalidQuestions: invalidQuestions.map((q) => q.question), // Provide details for debugging
-                });
-            }
-
-            processedQuestions = questions.map((q) => ({
-                ...q,
-                section: q.section || "default",
-            }));
-        } else {
-            // Assign "default" section for non-sectioned quizzes
-            processedQuestions = questions.map((q) => ({
-                ...q,
-                section: "default",
-            }));
         }
 
         // Validate required fields for practice quiz type
-        if (quizType === "practice") {
+        if (quizType === "practice" && !onlyCoding) {
             if (!questionTimer || questionTimer < 1) {
                 return res.status(400).json({
-                    error: "For practice quizzes, a valid questionTimer is required.",
+                    error: "For practice quizzes, a valid questionTimer is required unless onlyCoding is selected.",
                 });
             }
         }
 
+        // Validate and assign sections for non-coding questions
+        let processedQuestions = [];
+        if (!onlyCoding) {
+            if (sections && Array.isArray(sections)) {
+                const invalidQuestions = questions.filter(
+                    (q) => !q.section || !sections.includes(q.section)
+                );
+                if (invalidQuestions.length > 0) {
+                    return res.status(400).json({
+                        error: "Some questions are assigned to non-existent sections.",
+                        invalidQuestions: invalidQuestions.map((q) => q.question),
+                    });
+                }
+
+                processedQuestions = questions.map((q) => ({
+                    ...q,
+                    section: q.section || "default",
+                }));
+            } else {
+                processedQuestions = questions.map((q) => ({
+                    ...q,
+                    section: "default",
+                }));
+            }
+
+            // Validate `correctOption` for each question
+            processedQuestions.forEach((question) => {
+                const correctIndex = question.correctOption;
+                if (
+                    correctIndex === null ||
+                    correctIndex === undefined ||
+                    correctIndex < 0 ||
+                    correctIndex >= question.options.length
+                ) {
+                    throw new Error(
+                        `Invalid correctOption index for question: "${question.question}".`
+                    );
+                }
+            });
+        }
+
+        // Validate `questionsToSet`
+        if (!onlyCoding && questionsToSet > numberOfQuestions) {
+            return res.status(400).json({
+                error: "questionsToSet cannot be greater than total numberOfQuestions.",
+            });
+        }
+
+        // Validate coding questions (if applicable)
+        if ((codingWithQuiz || onlyCoding) && codingQuestions) {
+            codingQuestions.forEach((codingQuestion, index) => {
+                if (
+                    !codingQuestion.programSlug ||
+                    !codingQuestion.problemName ||
+                    !codingQuestion.description ||
+                    !codingQuestion.problemStatement ||
+                    !codingQuestion.inputFormat ||
+                    !codingQuestion.outputFormat ||
+                    !codingQuestion.constraints ||
+                    !codingQuestion.sampleInput ||
+                    !codingQuestion.sampleOutput ||
+                    !Array.isArray(codingQuestion.privateTestCases) ||
+                    codingQuestion.privateTestCases.some((testCase) => !testCase.trim()) // Ensure all private test cases are valid
+                ) {
+                    throw new Error(
+                        `Coding question ${index + 1} is missing required fields or contains invalid private test cases.`
+                    );
+                }
+
+                // Log a warning for invalid or missing image field (optional)
+                if (!codingQuestion.image) {
+                    console.warn(`Coding question ${index + 1} does not have an associated image.`);
+                }
+            });
+        }
+
+
+
+        // Convert quizTime to seconds for hiring quizzes
         let quizTimeInSeconds = 0;
         if (quizType === "hiring") {
-            // Convert quizTime to seconds
             if (quizTime && typeof quizTime === "string") {
                 quizTimeInSeconds = convertTimeToSeconds(quizTime);
                 if (isNaN(quizTimeInSeconds)) {
@@ -786,27 +885,20 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
             }
         }
 
-        // Validate `questionsToSet`
-        if (questionsToSet > numberOfQuestions) {
+        // Check codingTimer
+        if ((codingWithQuiz || onlyCoding) && (!codingTimer || isNaN(codingTimer))) {
             return res.status(400).json({
-                error: "questionsToSet cannot be greater than total numberOfQuestions.",
+                error: "A valid coding timer is required for coding quizzes.",
             });
         }
 
-        // Validate `correctOption` for each question
-        processedQuestions.forEach((question) => {
-            const correctIndex = question.correctOption;
-            if (
-                correctIndex === null ||
-                correctIndex === undefined ||
-                correctIndex < 0 ||
-                correctIndex >= question.options.length
-            ) {
-                throw new Error(
-                    `Invalid correctOption index for question: "${question.question}".`
-                );
-            }
-        });
+        // Assign default sections to coding questions
+        const codingQuestionsWithSections = codingQuestions.map((cq) => ({
+            ...cq,
+            section: sectionFeatureActive ? cq.section || "default" : "default", // Assign default section
+            image: cq.image || null, // Explicitly set the image field
+        }));
+        
 
         // Save quiz to the database
         const quiz = new Quiz({
@@ -818,11 +910,15 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
             questionsToSet,
             quizDate: quizType === "hiring" ? quizDate : null,
             quizTime: quizType === "hiring" ? quizTimeInSeconds : null,
-            quizDuration: quizType === "hiring" ? quizDuration : null,
-            questionTimer: quizType === "practice" ? questionTimer : null,
-            malpracticeLimit, // Add malpracticeLimit here
+            quizDuration: quizType === "hiring" && !onlyCoding ? quizDuration : null,
+            questionTimer: quizType === "practice" && !onlyCoding ? questionTimer : null,
+            malpracticeLimit,
             sections: sections && sections.length > 0 ? sections : ["default"],
-            questions: processedQuestions,
+            questions: !onlyCoding ? processedQuestions : [],
+            codingWithQuiz, // Include codingWithQuiz flag
+            onlyCoding, // Include onlyCoding flag
+            codingTimer: (codingWithQuiz || onlyCoding) ? codingTimer : null, // Add coding timer
+            codingQuestions: codingQuestionsWithSections, // Use validated coding questions
         });
 
         await quiz.save();
@@ -832,6 +928,9 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
         res.status(500).json({ error: "Failed to create quiz", details: error.message });
     }
 });
+
+
+
 
 
 
