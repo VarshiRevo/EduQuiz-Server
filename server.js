@@ -14,7 +14,7 @@ const upload = multer({ storage });
 env.config();
 // Middleware
 app.use(cors({
-    origin: ['https://elevatequiz.netlify.app', 'http://localhost:5173'], // Allow your frontend URL
+    origin: ['https://elevatequiz.netlify.app', 'http://localhost:5173','https://elevatequiz-coding.netlify.app'], // Allow your frontend URL
     methods: ['GET', 'POST', 'PUT', 'DELETE'], // Add the methods you need
     credentials: true, // Allow credentials if required
 }));
