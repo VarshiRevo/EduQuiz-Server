@@ -869,19 +869,24 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
                     !codingQuestion.sampleInput ||
                     !codingQuestion.sampleOutput ||
                     !Array.isArray(codingQuestion.privateTestCases) ||
-                    codingQuestion.privateTestCases.some((testCase) => !testCase.trim()) // Ensure all private test cases are valid
+                    codingQuestion.privateTestCases.some(
+                        (testCase) =>
+                            !testCase.input.trim() || // Validate `input` is not empty or only whitespace
+                            !testCase.output.trim() // Validate `output` is not empty or only whitespace
+                    )
                 ) {
                     throw new Error(
                         `Coding question ${index + 1} is missing required fields or contains invalid private test cases.`
                     );
                 }
-
-                // Log a warning for invalid or missing image field (optional)
+        
+                // Log a warning for missing or invalid image field (optional)
                 if (!codingQuestion.image) {
                     console.warn(`Coding question ${index + 1} does not have an associated image.`);
                 }
             });
         }
+        
 
 
 
