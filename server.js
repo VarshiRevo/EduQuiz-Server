@@ -810,8 +810,8 @@ app.post("/api/compile", async (req, res) => {
         // Generate a unique filename to prevent conflicts
         const baseFileName = `main_${uuidv4().replace(/-/g, "_")}`;
         const tmpDir = '/tmp'; // Use Render's temporary directory
-        const codeFile = `${tmpDir}/${fileBaseName}.${fileExtensions[language]}`;
-        const inputFile = `${tmpDir}/${fileBaseName}.input`;
+        const codeFile = `${tmpDir}/${baseFileName}.${fileExtensions[language]}`;
+        const inputFile = `${tmpDir}/${baseFileName}.input`;
 
         let modifiedCode = code;
 
