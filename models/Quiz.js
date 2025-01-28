@@ -71,19 +71,30 @@ const userProfileSchema = new mongoose.Schema({
   extracurriculars: { type: String },  // Extracurricular activities description
 });
 
-// Define the User Quiz Result schema (tracks individual user attempts)
 const userQuizResultSchema = new mongoose.Schema({
-  username: { type: String, required: true },
-  isLoggedIn: { type: Boolean, default: false },
-  responses: { type: Array, required: true }, // Array of user's answers
-  completed: { type: Boolean, default: false },
-  submittedAt: { type: Date },
-  totalTimeSpent: { type: Number },
-  correctAnswers: { type: Number, default: 0 },
-  percentage: { type: Number, default: 0 },
-  isPass: { type: Boolean, default: false },
-  malpracticeCount: { type: Number, default: 0 }, // Track malpractice count
-  isAutoSubmit: { type: Boolean, default: false }, // Indicate auto-submission
+  username: { type: String, required: true }, // Username of the participant
+  isLoggedIn: { type: Boolean, default: false }, // Whether the user is currently logged in
+  responses: { type: Array, required: false }, // Array of user's answers for non-coding questions
+  codingResults: { // Object of coding test case results indexed by question index
+      type: Map,
+      of: new mongoose.Schema({
+          passedTestCases: { type: Number, default: 0 },
+          totalTestCases: { type: Number, default: 0 },
+      }),
+      default: {}, // Ensure it's initialized
+  },
+  completed: { type: Boolean, default: false }, // Whether the quiz is completed
+  submittedAt: { type: Date }, // Date and time when the quiz was submitted
+  totalTimeSpent: { type: Number }, // Total time spent on the quiz
+  nonCodingScore: { type: Number, default: 0 }, // Score for non-coding questions
+  codingScore: { type: Number, default: 0 }, // Score for coding test cases
+  totalScore: { type: Number, default: 0 }, // Combined score
+  nonCodingPercentage: { type: Number, default: 0 }, // Percentage for non-coding questions
+  codingPercentage: { type: Number, default: 0 }, // Percentage for coding questions
+  overallPercentage: { type: Number, default: 0 }, // Overall percentage for the quiz
+  isPass: { type: Boolean, default: false }, // Whether the user passed the quiz
+  malpracticeCount: { type: Number, default: 0 }, // Number of malpractice attempts
+  isAutoSubmit: { type: Boolean, default: false }, // Whether the quiz was auto-submitted
 });
 
 // Define the Quiz schema

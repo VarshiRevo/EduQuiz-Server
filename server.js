@@ -8,9 +8,12 @@ const Quiz = require('./models/Quiz'); // Assuming Quiz model is correctly defin
 const env = require('dotenv')
 const app = express();
 const moment = require("moment-timezone");
-
+const fs = require('fs');
+const { exec } = require("child_process");
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
+const crypto = require("crypto");
+const { v4: uuidv4 } = require("uuid"); // Import the uuid function
 env.config();
 // Middleware
 app.use(cors({
@@ -169,94 +172,306 @@ app.get('/api/quizzes/:quizId/users/:username/profile', async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 });
-
-
-app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
+app.post('/api/quizzes/:quizId/users/:username/save-responses', async (req, res) => {
     const { quizId, username } = req.params;
-    const { responses, totalTimeSpent } = req.body;
-
-    console.log(`Submit request received for quizId: ${quizId}, username: ${username}`);
-    console.log('Received Responses:', JSON.stringify(responses, null, 2));
+    const { responses } = req.body;
 
     try {
         const quiz = await Quiz.findById(quizId);
         if (!quiz) {
-            console.warn(`Quiz with ID ${quizId} not found`);
-            return res.status(404).json({ error: 'Quiz not found' });
+            console.error("Debug: Quiz not found");
+            return res.status(404).json({ message: 'Quiz not found' });
         }
 
-        console.log(`Quiz Questions:`, JSON.stringify(quiz.questions, null, 2));
-
-        const userCredential = quiz.credentials.find((cred) => cred.username === username);
-        if (!userCredential) {
-            console.warn(`Username ${username} not found in quiz credentials`);
-            return res.status(403).json({ error: 'User is not authorized for this quiz.' });
+        const userResponse = quiz.userResponses.find((response) => response.username === username);
+        if (!userResponse) {
+            console.error("Debug: User response not found for username:", username);
+            return res.status(404).json({ message: 'User not found for this quiz.' });
         }
 
-        const existingResponse = quiz.userResponses.find((response) => response.username === username);
-        if (existingResponse && existingResponse.completed) {
-            return res.status(400).json({ error: 'Test already submitted' });
+        console.log("Debug: Saving responses:", responses);
+
+        userResponse.responses = responses; // Save the quiz responses
+        await quiz.save();
+
+        res.status(200).json({ message: "Responses saved successfully" });
+    } catch (error) {
+        console.error("Debug: Error saving responses:", error.message);
+        res.status(500).json({ error: 'Internal server error.', details: error.message });
+    }
+});
+
+
+app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
+    const { quizId, username } = req.params;
+    const { responses = [], codingResults = {}, totalTimeSpent = 0 } = req.body;
+
+    try {
+        const quiz = await Quiz.findById(quizId);
+        if (!quiz) {
+            console.error("Debug: Quiz not found");
+            return res.status(404).json({ message: 'Quiz not found' });
         }
 
-        const questionsToSet = quiz.questionsToSet || quiz.questions.length; // Fallback to all questions if not set
-        const shuffledQuestions = quiz.questions.slice(0, questionsToSet); // Use the first `questionsToSet` questions
+        const userResponse = quiz.userResponses.find((response) => response.username === username);
+        if (!userResponse) {
+            console.error("Debug: User response not found for username:", username);
+            return res.status(404).json({ message: 'User not found for this quiz.' });
+        }
 
-        let correctAnswers = 0;
+        console.log("Debug: Responses received:", responses);
 
-        // Validate user responses against correct options
-        responses.forEach((response) => {
-            const question = shuffledQuestions[response.questionIndex];
-            if (!question) return;
+        // Initialize scores
+        let nonCodingScore = 0;
+        let totalPassedTestCases = 0;
+        let totalTestCases = 0;
+        let nonCodingPercentage = 0; // Ensure it is defined for all cases
 
-            console.log(`Validating Question: ${response.questionIndex}`);
-            console.log(`Correct Option: ${question.correctOption}`);
-            console.log(`User's Answer: ${response.answer}`);
+        if (!quiz.onlyCoding) {
+            // Match responses to non-coding questions and calculate score
+            responses.forEach((response) => {
+                const question = quiz.questions[response.questionIndex];
+                if (question) {
+                    console.log(`Debug: Question Index: ${response.questionIndex}`);
+                    console.log(`Debug: User Answer: ${response.answer}`);
+                    console.log(`Debug: Correct Option: ${question.correctOption}`);
 
-            const correctOptionIndex = question.correctOption; // Correct option is a string
-            if (response.answer !== null && response.answer === correctOptionIndex) {
-                console.log(`Answer is Correct`);
-                correctAnswers += 1; // Increment score if correct
-            } else {
-                console.log(`Answer is Incorrect`);
-            }
+                    if (parseInt(response.answer) === parseInt(question.correctOption)) {
+                        nonCodingScore++;
+                        console.log("Debug: Answer is correct.");
+                    } else {
+                        console.log("Debug: Answer is incorrect.");
+                    }
+                } else {
+                    console.log(`Debug: Question not found for index ${response.questionIndex}`);
+                }
+            });
+
+            console.log("Debug: Non-Coding Correct Answers:", nonCodingScore);
+            console.log("Debug: Non-Coding Total Questions:", quiz.questionsToSet);
+
+            // Ensure questionsToSet is valid and calculate percentage
+            nonCodingPercentage = quiz.questionsToSet && quiz.questionsToSet > 0
+                ? (nonCodingScore / quiz.questionsToSet) * 100
+                : 0;
+
+            console.log("Debug: Non-Coding Score:", nonCodingScore);
+            console.log("Debug: Non-Coding Percentage:", nonCodingPercentage);
+        }
+
+        // Handle coding results
+        const storedCodingResults = userResponse.codingResults || {};
+        Object.entries(storedCodingResults).forEach(([key, result]) => {
+            totalPassedTestCases += result.passedTestCases || 0;
+            totalTestCases += result.totalTestCases || 0;
         });
 
-        const percentage = (correctAnswers / questionsToSet) * 100; // Calculate based on `questionsToSet`
+        // Merge new coding results
+        Object.entries(codingResults).forEach(([key, result]) => {
+            if (!storedCodingResults[key]) {
+                storedCodingResults[key] = result;
+            }
+            totalPassedTestCases += result.passedTestCases || 0;
+            totalTestCases += result.totalTestCases || 0;
+        });
+
+        console.log("Debug: Total Passed Test Cases:", totalPassedTestCases);
+        console.log("Debug: Total Test Cases:", totalTestCases);
+
+        userResponse.codingResults = storedCodingResults; // Update coding results immediately
+
+        const codingPercentage = totalTestCases > 0
+            ? (totalPassedTestCases / totalTestCases) * 100
+            : 0;
+
+        console.log("Debug: Calculated Coding Percentage:", codingPercentage);
+
+        // Calculate overall percentage
+        const overallPercentage = quiz.onlyCoding
+            ? codingPercentage
+            : quiz.codingWithQuiz
+                ? (nonCodingPercentage + codingPercentage) / 2
+                : nonCodingPercentage || 0;
+
+        console.log("Debug: Overall Percentage:", overallPercentage);
+
+        const isPass = overallPercentage >= quiz.passPercentage;
+
+        // Update user response
+        userResponse.completed = true;
+        userResponse.submittedAt = new Date();
+        userResponse.totalTimeSpent = totalTimeSpent;
+        userResponse.responses = responses; // Save all responses
+        userResponse.nonCodingScore = Number(nonCodingScore) || 0;
+        userResponse.codingScore = Number(totalPassedTestCases) || 0;
+        userResponse.totalScore = Number(nonCodingScore + totalPassedTestCases) || 0;
+        userResponse.nonCodingPercentage = nonCodingPercentage;
+        userResponse.codingPercentage = codingPercentage;
+        userResponse.overallPercentage = overallPercentage;
+        userResponse.isPass = isPass;
+
+        await quiz.save();
+
+        res.status(200).json({
+            message: 'Quiz submitted successfully',
+            overallPercentage,
+            codingPercentage,
+            nonCodingPercentage,
+            isPass,
+        });
+    } catch (error) {
+        console.error("Debug: Error during quiz submission:", error.message);
+        res.status(500).json({ error: 'Internal server error.', details: error.message });
+    }
+});
+
+
+app.post('/api/quizzes/:quizId/users/:username/update-results', async (req, res) => {
+    const { quizId, username } = req.params;
+    const { codingResults } = req.body;
+
+    try {
+        const quiz = await Quiz.findById(quizId);
+        if (!quiz) {
+            console.error("Debug: Quiz not found");
+            return res.status(404).json({ message: 'Quiz not found' });
+        }
+
+        const userResponse = quiz.userResponses.find((response) => response.username === username);
+        if (!userResponse) {
+            console.error("Debug: User response not found for username:", username);
+            return res.status(404).json({ message: 'User not found for this quiz.' });
+        }
+
+        console.log("Debug: Coding results received for update:", codingResults);
+
+        const storedCodingResults = userResponse.codingResults || {};
+
+        // Merge new coding results into storedCodingResults
+        Object.entries(codingResults).forEach(([key, result]) => {
+            storedCodingResults[key] = {
+                ...storedCodingResults[key],
+                ...result, // Merge existing and new results
+            };
+        });
+
+        // Update the user's coding results
+        userResponse.codingResults = storedCodingResults;
+
+        console.log("Debug: Updated coding results in DB:", storedCodingResults);
+
+        await quiz.save();
+
+        res.status(200).json({
+            message: 'Coding results updated successfully',
+            updatedResults: storedCodingResults,
+        });
+    } catch (error) {
+        console.error("Debug: Error updating coding results:", error.message);
+        res.status(500).json({ error: 'Internal server error.', details: error.message });
+    }
+});
+
+
+
+
+
+
+
+
+
+app.post('/api/quizzes/:quizId/users/submit', async (req, res) => {
+    const { quizId } = req.params;
+    const { username, responses = [], codingResults = [], totalTimeSpent } = req.body;
+
+    try {
+        // Find the quiz
+        const quiz = await Quiz.findById(quizId);
+        if (!quiz) {
+            return res.status(404).json({ message: 'Quiz not found' });
+        }
+
+        // Check if the user has already submitted the quiz
+        const userResult = quiz.userResponses.find(result => result.username === username);
+        if (userResult?.completed) {
+            return res.status(403).json({ message: 'User has already submitted this quiz.' });
+        }
+
+        let score = 0;
+        let codingScore = 0;
+        let totalScore = 0;
+
+        if (quiz.onlyCoding) {
+            // Handle onlyCoding logic
+            if (codingResults.includes('pass')) {
+                codingScore = codingResults.length; // All test cases passed
+                totalScore = codingScore;
+            } else {
+                codingScore = 0;
+                totalScore = 0;
+            }
+        } else {
+            // Calculate score for non-coding questions
+            if (responses.length > 0) {
+                responses.forEach((response) => {
+                    const question = quiz.questions[response.questionIndex];
+                    if (!question) return;
+
+                    const correctOptionIndex = parseInt(question.correctOption, 10); // Ensure it's a number
+                    if (response.answer === correctOptionIndex.toString()) {
+                        score += 1; // Increment score if answer matches the correct option
+                    }
+                });
+            }
+
+            // Handle coding quiz results if `codingWithQuiz` is enabled
+            if (quiz.codingWithQuiz && codingResults.length > 0) {
+                codingResults.forEach((result) => {
+                    if (result === 'pass') {
+                        codingScore += 1; // Increment for passed coding questions
+                    }
+                });
+            }
+
+            totalScore = score + codingScore;
+        }
+
+        // Calculate percentage
+        const totalQuestions = (quiz.questions.length || 0) + (quiz.codingQuestions?.length || 0);
+        let percentage = 0;
+
+        if (quiz.onlyCoding) {
+            percentage = totalScore > 0 ? 100 : 0; // For onlyCoding quizzes
+        } else if (totalQuestions > 0) {
+            percentage = (totalScore / totalQuestions) * 100; // For mixed quizzes
+        }
+
+        // Determine pass/fail status
         const isPass = percentage >= quiz.passPercentage;
 
-        console.log(`Correct Answers: ${correctAnswers}`);
-        console.log(`Questions to Set: ${questionsToSet}`);
-        console.log(`Percentage: ${percentage}`);
-
-        // Remove any incomplete entry for the same user before saving
-        quiz.userResponses = quiz.userResponses.filter((response) => response.username !== username);
-
-        // Save the user's response and score
+        // Update the user's quiz result and mark as completed
         quiz.userResponses.push({
             username,
             responses,
+            codingResults, // Store coding validation results
             completed: true,
             submittedAt: new Date(),
             totalTimeSpent,
-            correctAnswers,
+            score,
+            codingScore,
+            totalScore,
             percentage,
             isPass,
         });
 
         await quiz.save();
-
-        console.log(`Test submitted successfully for username: ${username}`);
-        res.status(200).json({
-            message: 'Test submitted successfully!',
-            correctAnswers,
-            percentage,
-            isPass,
-        });
+        res.status(200).json({ message: 'Quiz submitted successfully', score: totalScore, percentage, isPass });
     } catch (error) {
-        console.error('Error submitting test:', error);
-        res.status(500).json({ error: 'Error submitting test' });
+        console.error('Error during quiz submission:', error.message);
+        res.status(500).json({ error: 'Internal server error', details: error.message });
     }
 });
+
 
 
 
@@ -423,6 +638,245 @@ app.get('/api/quizzes/:quizId', async (req, res) => {
 
 
 
+app.post("/api/validate-code", async (req, res) => {
+    const { language, code, privateTestCases, quizId, username, questionIndex } = req.body;
+
+    try {
+        // Validate required parameters
+        if (!quizId || !username || questionIndex === undefined) {
+            console.error("Missing required parameters: quizId, username, or questionIndex");
+            return res.status(400).json({ error: "Missing required parameters: quizId, username, or questionIndex." });
+        }
+
+        const languageCommands = {
+            javascript: "node",
+            python: "python",
+            java: "javac && java",
+            c: "gcc",
+            cpp: "g++",
+        };
+
+        if (!languageCommands[language]) {
+            console.error("Unsupported language:", language);
+            return res.status(400).json({ error: "Unsupported language." });
+        }
+
+        const fileExtensions = {
+            javascript: "js",
+            python: "py",
+            java: "java",
+            c: "c",
+            cpp: "cpp",
+        };
+
+        const fileBaseName = `main_${uuidv4().replace(/-/g, "_")}`;
+        const codeFile = `./${fileBaseName}.${fileExtensions[language]}`;
+
+        // Modify code for specific languages (e.g., Java class name adjustments)
+        let modifiedCode = code;
+        if (language === "java") {
+            const classNameRegex = /public\s+class\s+\w+/;
+            const classNameMatch = code.match(classNameRegex);
+
+            if (!classNameMatch) {
+                console.error("Java code must contain a public class.");
+                return res.status(400).json({ error: "Java code must contain a public class." });
+            }
+
+            modifiedCode = code.replace(classNameRegex, `public class ${fileBaseName}`);
+        }
+
+        fs.writeFileSync(codeFile, modifiedCode); // Write the code file
+
+        let passedTestCases = 0;
+        const totalTestCases = privateTestCases.length;
+
+        for (const testCase of privateTestCases) {
+            const inputFile = `./${fileBaseName}.input`;
+            fs.writeFileSync(inputFile, testCase.input.trim());
+
+            let command;
+            if (language === "c" || language === "cpp") {
+                command = `${languageCommands[language]} ${codeFile} -o ${fileBaseName} && ./${fileBaseName} < ${inputFile}`;
+            } else if (language === "java") {
+                command = `${languageCommands[language].split(" && ")[0]} ${codeFile} && java ${fileBaseName} < ${inputFile}`;
+            } else {
+                command = `${languageCommands[language]} ${codeFile} < ${inputFile}`;
+            }
+
+            try {
+                const output = await new Promise((resolve, reject) => {
+                    exec(command, (error, stdout, stderr) => {
+                        try {
+                            fs.unlinkSync(inputFile); // Cleanup input file
+                        } catch (cleanupError) {
+                            console.error("Error cleaning up input file:", cleanupError.message);
+                        }
+
+                        if (error) return reject(stderr || error.message);
+                        resolve(stdout.trim());
+                    });
+                });
+
+                if (output === testCase.output.trim()) {
+                    passedTestCases++;
+                }
+            } catch (executionError) {
+                console.error(`Error executing test case with input: ${testCase.input}`, executionError.message);
+            }
+        }
+
+        try {
+            fs.unlinkSync(codeFile); // Cleanup code file
+            if (language === "java") fs.unlinkSync(`./${fileBaseName}.class`);
+            if (language === "c" || language === "cpp") fs.unlinkSync(`./${fileBaseName}`);
+        } catch (cleanupError) {
+            console.error("Error during cleanup:", cleanupError.message);
+        }
+
+        // Fetch the quiz and update user coding results
+        const quiz = await Quiz.findById(quizId);
+        if (!quiz) {
+            console.error("Quiz not found for ID:", quizId);
+            return res.status(404).json({ error: "Quiz not found." });
+        }
+
+        const userResponseIndex = quiz.userResponses.findIndex((response) => response.username === username);
+        if (userResponseIndex === -1) {
+            console.error("User not found in quiz for username:", username);
+            return res.status(404).json({ error: "User not found for this quiz." });
+        }
+
+        const userResponse = quiz.userResponses[userResponseIndex];
+
+        // Ensure codingResults exists
+        if (!userResponse.codingResults) {
+            userResponse.codingResults = {};
+        }
+
+        userResponse.codingResults[questionIndex] = {
+            passedTestCases,
+            totalTestCases,
+        };
+
+        // Save the updated quiz
+        await quiz.save();
+
+        res.status(200).json({
+            message: "Validation completed and results saved.",
+            passedTestCases,
+            totalTestCases,
+        });
+    } catch (err) {
+        console.error("Internal server error:", err.message);
+        res.status(500).json({ error: "Internal server error.", details: err.message });
+    }
+});
+
+
+
+
+
+
+
+
+
+
+
+app.post("/api/compile", async (req, res) => {
+    const { language, code, input } = req.body;
+
+    try {
+        const languageCommands = {
+            javascript: "node",
+            python: "python",
+            java: "javac && java",
+            c: "gcc",
+            cpp: "g++",
+        };
+
+        if (!languageCommands[language]) {
+            return res.status(400).json({ error: "Unsupported language." });
+        }
+
+        const fileExtensions = {
+            javascript: "js",
+            python: "py",
+            java: "java",
+            c: "c",
+            cpp: "cpp",
+        };
+
+        // Generate a unique filename to prevent conflicts
+        const baseFileName = `main_${uuidv4().replace(/-/g, "_")}`;
+        const tmpDir = '/tmp'; // Use Render's temporary directory
+        const codeFile = `${tmpDir}/${fileBaseName}.${fileExtensions[language]}`;
+        const inputFile = `${tmpDir}/${fileBaseName}.input`;
+
+        let modifiedCode = code;
+
+        // Language-specific code adjustments
+        if (language === "java") {
+            const classNameRegex = /public\s+class\s+(\w+)/;
+            const classNameMatch = code.match(classNameRegex);
+
+            if (!classNameMatch) {
+                return res.status(400).json({ error: "Java code must contain a public class." });
+            }
+
+            const originalClassName = classNameMatch[1];
+            modifiedCode = code.replace(classNameRegex, `public class ${baseFileName}`);
+        } else if (language === "c" || language === "cpp") {
+            if (!code.includes("main")) {
+                return res.status(400).json({ error: "C/C++ code must include a `main` function." });
+            }
+        }
+
+        // Write code and input files
+        fs.writeFileSync(codeFile, modifiedCode);
+        fs.writeFileSync(inputFile, input.trim());
+
+        let command;
+        if (language === "c") {
+            command = `${languageCommands[language]} ${codeFile} -o ${baseFileName} && ./${baseFileName} < ${inputFile}`;
+        } else if (language === "cpp") {
+            command = `${languageCommands[language]} ${codeFile} -o ${baseFileName} && ./${baseFileName} < ${inputFile}`;
+        } else if (language === "java") {
+            command = `${languageCommands[language].split(" && ")[0]} ${codeFile} && java ${baseFileName} < ${inputFile}`;
+        } else {
+            command = `${languageCommands[language]} ${codeFile} < ${inputFile}`;
+        }
+
+        // Execute the command
+        exec(command, (error, stdout, stderr) => {
+            try {
+                // Cleanup: Delete files after execution
+                fs.unlinkSync(codeFile);
+                fs.unlinkSync(inputFile);
+
+                if (language === "c" || language === "cpp") {
+                    fs.unlinkSync(`./${baseFileName}`);
+                }
+
+                if (language === "java") {
+                    fs.unlinkSync(`./${baseFileName}.class`);
+                }
+            } catch (cleanupError) {
+                console.error("Error during cleanup:", cleanupError.message);
+            }
+
+            if (error) {
+                console.error("Compilation/Execution Error:", stderr || error.message);
+                return res.status(200).json({ output: null, error: stderr || error.message });
+            }
+
+            res.status(200).json({ output: stdout.trim(), error: null });
+        });
+    } catch (err) {
+        console.error("Internal Server Error:", err.message);
+        res.status(500).json({ error: "Internal server error.", details: err.message });
+    }
+});
 
 
 
@@ -446,7 +900,11 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
             quizDate,
             quizTime,
             quizDuration,
-            malpracticeLimit
+            malpracticeLimit,
+            onlyCoding,
+            codingWithQuiz,
+            codingQuestions,
+            codingTimer,
         } = quiz;
 
         console.log("Raw quizDate:", quizDate);
@@ -473,7 +931,17 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
 
             // Calculate Start and End Time
             quizStartTime = moment.tz(`${quizDate} ${formattedTime}`, "YYYY-MM-DD HH:mm:ss", "Asia/Kolkata");
-            quizEndTime = quizStartTime.clone().add(quizDurationInSeconds, "seconds");
+
+            if (onlyCoding) {
+                // For onlyCoding, use the coding timer as the global timer
+                quizEndTime = quizStartTime.clone().add(codingTimer * 60, "seconds");
+            } else if (codingWithQuiz) {
+                // For codingWithQuiz, quiz duration applies to the quiz part
+                quizEndTime = quizStartTime.clone().add(quizDurationInSeconds, "seconds");
+            } else {
+                // Default case for regular hiring quizzes
+                quizEndTime = quizStartTime.clone().add(quizDurationInSeconds, "seconds");
+            }
 
             const currentTime = moment().tz("Asia/Kolkata");
             console.log("Current Time:", currentTime.format());
@@ -489,74 +957,131 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
             if (currentTime.isBefore(quizStartTime)) {
                 return res.status(403).json({ error: "Quiz has not started yet." });
             } else if (currentTime.isAfter(quizEndTime)) {
+                if (onlyCoding || codingWithQuiz) {
+                    console.warn(`Timer expired for quizId: ${quizId}, transitioning to auto-submit.`);
+                    return res.status(200).json({ message: "Quiz automatically submitted as the timer expired." });
+                }
                 return res.status(403).json({ error: "Quiz has ended." });
             }
         }
 
-        // Handle Practice Quiz Logic
-        if (quizType === "practice") {
-            if (!questionTimer || questions.length === 0) {
-                return res.status(400).json({ error: "Invalid practice quiz settings or no questions." });
-            }
+
+        let codingTimers = null;
+        if (quizType === "hiring" && (onlyCoding || codingWithQuiz)) {
+            // Divide coding timer equally among all coding questions
+            const questionCount = codingQuestions.length;
+            const timerPerQuestion = Math.floor((codingTimer * 60) / questionCount); // Calculate per-question timer in seconds
+
+            codingTimers = codingQuestions.map(() => timerPerQuestion); // Assign the same timer to all coding questions
+        } else if (quizType === "practice") {
+            // For practice type quizzes, assign individual timers for each question
+            codingTimers = codingQuestions.map(() =>
+                quiz.codingTimer && quiz.codingTimer > 0 ? quiz.codingTimer * 60 : 300 // Default to 5 mins per question
+            );
         }
 
-        // Check if user already completed the test
+
+
+        // Fetch user-specific details
         const userResponse = quiz.userResponses.find((response) => response.username === username);
-        if (userResponse && userResponse.completed) {
+
+        if (userResponse?.completed) {
             return res.status(400).json({ error: "Test already completed." });
         }
 
-        // Validate questions and questionsToSet
-        if (!questions || questions.length === 0) {
-            return res.status(400).json({ error: "No questions available for this quiz." });
+        // Handle only coding quizzes
+        if (onlyCoding) {
+            const currentTime = moment().tz("Asia/Kolkata");
+            const remainingTime = Math.floor((quizEndTime - currentTime) / 1000);
+
+            if (currentTime.isBefore(quizStartTime)) {
+                return res.status(403).json({ error: "Quiz has not started yet." });
+            }
+
+            if (currentTime.isAfter(quizEndTime)) {
+                console.warn(`Timer expired for quizId: ${quizId}, transitioning to auto-submit.`);
+                return res.status(200).json({ message: "Quiz automatically submitted as the timer expired." });
+            }
+
+            // Respond with the remaining timer
+            return res.json({
+                quizTitle,
+                quizDescription,
+                quizType,
+                onlyCoding,
+                passPercentage,
+                codingQuestions,
+                codingTimers,
+                globalTimer: Math.max(remainingTime, 0),
+                codingResults: userResponse?.codingResults || {}, // Include coding results
+                quizDuration: quizType === "hiring" ? quizDurationInSeconds : null,
+                quizStartTime: quizStartTime ? quizStartTime.toISOString() : null,
+                quizEndTime: quizEndTime ? quizEndTime.toISOString() : null,
+                malpracticeLimit: malpracticeLimit || 3,
+            });
         }
-        if (!questionsToSet || questionsToSet > questions.length || questionsToSet <= 0) {
-            return res.status(400).json({ error: "Invalid questionsToSet value." });
+
+
+
+
+        // Handle quizzes with coding and regular questions
+        if (codingWithQuiz || (!onlyCoding && !codingWithQuiz)) {
+            if (!questionsToSet || questionsToSet > questions.length || questionsToSet <= 0) {
+                return res.status(400).json({ error: "Invalid questionsToSet value." });
+            }
+
+            // Shuffle questions using seeded random function
+            let seed = username.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+            const seededRandom = () => {
+                const x = Math.sin(seed++) * 10000;
+                return x - Math.floor(x);
+            };
+
+            const shuffledQuestions = questions
+                .map((question) => ({ question, sortKey: seededRandom() }))
+                .sort((a, b) => a.sortKey - b.sortKey)
+                .map(({ question }) => question);
+
+            const selectedQuestions = shuffledQuestions.slice(0, questionsToSet);
+
+            // Group questions by sections
+            const sections = [...new Set(selectedQuestions.map((q) => q.section))];
+            const questionsBySection = sections.reduce((acc, section) => {
+                acc[section] = selectedQuestions.filter((q) => q.section === section);
+                return acc;
+            }, {});
+
+            return res.json({
+                quizTitle,
+                quizDescription,
+                quizType,
+                passPercentage,
+                codingWithQuiz,
+                onlyCoding,
+                quizDuration: quizType === "hiring" ? quizDurationInSeconds : null,
+                quizStartTime: quizStartTime ? quizStartTime.toISOString() : null,
+                quizEndTime: quizEndTime ? quizEndTime.toISOString() : null,
+                questionTimer: quizType === "practice" ? questionTimer : null,
+                quizDate: quizDate || null,
+                quizTime: formattedTime || null,
+                sections,
+                questionsBySection,
+                codingQuestions: codingWithQuiz ? codingQuestions : null, // Include coding questions if applicable
+                codingTimers,
+                codingResults: userResponse?.codingResults || {}, // Include coding results for codingWithQuiz
+                malpracticeLimit: malpracticeLimit || 3,
+            });
         }
-
-        // Shuffle questions using seeded random function
-        let seed = username.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        const seededRandom = () => {
-            const x = Math.sin(seed++) * 10000;
-            return x - Math.floor(x);
-        };
-
-        const shuffledQuestions = questions
-            .map((question) => ({ question, sortKey: seededRandom() }))
-            .sort((a, b) => a.sortKey - b.sortKey)
-            .map(({ question }) => question);
-
-        const selectedQuestions = shuffledQuestions.slice(0, questionsToSet);
-
-        // Group questions by sections
-        const sections = [...new Set(selectedQuestions.map((q) => q.section))];
-        const questionsBySection = sections.reduce((acc, section) => {
-            acc[section] = selectedQuestions.filter((q) => q.section === section);
-            return acc;
-        }, {});
-
-        // Return response with conditional properties
-        res.json({
-            quizTitle,
-            quizDescription,
-            quizType,
-            passPercentage,
-            quizDuration: quizType === "hiring" ? quizDurationInSeconds : null,
-            quizStartTime: quizStartTime ? quizStartTime.toISOString() : null,
-            quizEndTime: quizEndTime ? quizEndTime.toISOString() : null,
-            questionTimer: quizType === "practice" ? questionTimer : null,
-            quizDate: quizDate || null,
-            quizTime: formattedTime || null,
-            sections,
-            questionsBySection,
-            malpracticeLimit: quiz.malpracticeLimit || 3, // Default to 3 if not specified
-        });
-
     } catch (error) {
         console.error("Error fetching quiz:", error.message);
         res.status(500).json({ error: "Error fetching quiz." });
     }
 });
+
+
+
+
+
 
 
 
@@ -614,48 +1139,80 @@ app.get('/api/quizzes/:quizId/users/status', async (req, res) => {
 // Example logic for handling quiz submission
 app.post('/api/quizzes/:quizId/users/submit', async (req, res) => {
     const { quizId } = req.params;
-    const { username, responses, totalTimeSpent } = req.body;
+    const { username, responses, codingResults, totalTimeSpent } = req.body;
 
-    const quiz = await Quiz.findById(quizId);
-
-    if (!quiz) return res.status(404).json({ message: 'Quiz not found' });
-
-    // Check if the user has already attempted the quiz
-    const userResult = quiz.userResponses.find(result => result.username === username);
-    if (userResult?.hasAttempted) {
-        return res.status(403).json({ message: 'User has already submitted this quiz.' });
-    }
-
-    // Calculate score based on the correct answers
-    let score = 0;
-    responses.forEach((response) => {
-        const question = quiz.questions[response.questionIndex];
-        if (!question) return;
-
-        const correctOptionIndex = parseInt(question.correctOption, 10); // Ensure it's a number
-        if (response.answer === correctOptionIndex) {
-            correctAnswers += 1; // Increment score if answer matches the correct option
+    try {
+        // Find the quiz
+        const quiz = await Quiz.findById(quizId);
+        if (!quiz) {
+            return res.status(404).json({ message: 'Quiz not found' });
         }
-    });
 
+        // Check if the user has already attempted the quiz
+        const userResult = quiz.userResponses.find(result => result.username === username);
+        if (userResult?.completed) {
+            return res.status(403).json({ message: 'User has already submitted this quiz.' });
+        }
 
+        let score = 0;
+        let codingScore = 0;
 
-    // Update the user's quiz result and mark as attempted
-    quiz.userResponses.push({
-        username,
-        responses,
-        completed: true,
-        submittedAt: new Date(),
-        totalTimeSpent,
-        score,
-        hasAttempted: true,
+        // Calculate score for non-coding questions
+        if (responses) {
+            responses.forEach((response) => {
+                const question = quiz.questions[response.questionIndex];
+                if (!question) return;
 
+                const correctOptionIndex = parseInt(question.correctOption, 10); // Ensure it's a number
+                if (response.answer === correctOptionIndex.toString()) {
+                    score += 1; // Increment score if answer matches the correct option
+                }
+            });
+        }
 
-    });
+        // Handle coding quiz validation results
+        if (quiz.onlyCoding || quiz.codingWithQuiz) {
+            if (codingResults) {
+                codingResults.forEach((result) => {
+                    if (result === 'pass') {
+                        codingScore += 1; // Increment coding score for passed test cases
+                    }
+                });
+            }
+        }
 
-    await quiz.save();
-    res.status(200).json({ message: 'Quiz submitted successfully', score });
+        const totalScore = score + codingScore;
+
+        // Calculate percentage
+        const totalQuestions = (quiz.questions.length || 0) + (quiz.codingQuestions?.length || 0);
+        const percentage = totalQuestions > 0 ? (totalScore / totalQuestions) * 100 : 0;
+
+        // Determine pass/fail status
+        const isPass = percentage >= quiz.passPercentage;
+
+        // Update the user's quiz result and mark as completed
+        quiz.userResponses.push({
+            username,
+            responses,
+            codingResults, // Store coding validation results
+            completed: true,
+            submittedAt: new Date(),
+            totalTimeSpent,
+            score,
+            codingScore,
+            totalScore,
+            percentage,
+            isPass,
+        });
+
+        await quiz.save();
+        res.status(200).json({ message: 'Quiz submitted successfully', score: totalScore, percentage, isPass });
+    } catch (error) {
+        console.error('Error during quiz submission:', error.message);
+        res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
 });
+
 
 
 
@@ -690,6 +1247,7 @@ const validateQuiz = (req, res, next) => {
         quizTime,
         quizDuration,
         questionTimer,
+        codingWithQuiz,
         onlyCoding,
         codingQuestions = [], // Default to an empty array if undefined
         sections = [], // Default to an empty array if undefined
@@ -721,24 +1279,30 @@ const validateQuiz = (req, res, next) => {
     // Validate section assignments if section feature is active
     // Validate section assignments if section feature is active
     if (sectionFeatureActive && Array.isArray(sections) && sections.length > 0) {
-        if (!Array.isArray(codingQuestions) || codingQuestions.length === 0) {
+        // Ensure coding questions are allowed for quizzes with coding
+        if (!onlyCoding && !codingWithQuiz && codingQuestions.length > 0) {
             return res.status(400).json({
-                error: "Coding questions must be provided when the section feature is active.",
+                error: "Coding questions are not allowed for practice quizzes with sections when neither onlyCoding nor codingWithQuiz is enabled.",
             });
         }
 
-        // Assign default sections to missing fields
-        const validatedCodingQuestions = codingQuestions.map((cq) => ({
-            ...cq,
-            section: cq.section || "default", // Default section
-        }));
+        // Assign default sections to coding questions if applicable
+        if (codingWithQuiz || onlyCoding) {
+            const validatedCodingQuestions = codingQuestions.map((cq) => ({
+                ...cq,
+                section: cq.section || "default", // Assign "default" if no section is specified
+            }));
 
-        if (validatedCodingQuestions.some((cq) => !sections.includes(cq.section))) {
-            return res.status(400).json({
-                error: "All coding questions must be assigned to valid sections.",
-            });
+            // Ensure all coding questions belong to valid sections
+            if (validatedCodingQuestions.some((cq) => !sections.includes(cq.section))) {
+                return res.status(400).json({
+                    error: "All coding questions must be assigned to valid sections.",
+                });
+            }
         }
     }
+
+
     if (codingQuestions.length > 0) {
         for (const [index, question] of codingQuestions.entries()) {
             if (
@@ -879,14 +1443,14 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
                         `Coding question ${index + 1} is missing required fields or contains invalid private test cases.`
                     );
                 }
-        
+
                 // Log a warning for missing or invalid image field (optional)
                 if (!codingQuestion.image) {
                     console.warn(`Coding question ${index + 1} does not have an associated image.`);
                 }
             });
         }
-        
+
 
 
 
@@ -920,8 +1484,8 @@ app.post("/api/quizzes", validateQuiz, async (req, res) => {
                 output: testCase.output || '',
             })),
         }));
-        
-        
+
+
 
         // Save quiz to the database
         const quiz = new Quiz({
