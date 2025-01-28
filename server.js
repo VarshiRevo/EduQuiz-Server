@@ -699,9 +699,9 @@ app.post("/api/validate-code", async (req, res) => {
 
             let command;
             if (language === "c" || language === "cpp") {
-                command = `${languageCommands[language]} ${codeFile} -o ${fileBaseName} && ./${fileBaseName} < ${inputFile}`;
+                command = `${languageCommands[language]} ${codeFile} -o /tmp/${fileBaseName} && /tmp/${fileBaseName} < ${inputFile}`;
             } else if (language === "java") {
-                command = `${languageCommands[language].split(" && ")[0]} ${codeFile} && java ${fileBaseName} < ${inputFile}`;
+                command = `${languageCommands[language].split(" && ")[0]} ${codeFile} && java -cp /tmp ${fileBaseName} < ${inputFile}`;
             } else {
                 command = `${languageCommands[language]} ${codeFile} < ${inputFile}`;
             }
@@ -729,15 +729,17 @@ app.post("/api/validate-code", async (req, res) => {
         }
 
         try {
-            fs.unlinkSync(codeFile); // Cleanup code file
-            if (language === "java") fs.unlinkSync(`/tmp/${fileBaseName}.class`);
-
-            if (language === "c" || language === "cpp") fs.unlinkSync(`/tmp/${fileBaseName}`);
-
+            if (fs.existsSync(codeFile)) fs.unlinkSync(codeFile); // Cleanup code file
+            if (language === "java" && fs.existsSync(`/tmp/${fileBaseName}.class`)) {
+                fs.unlinkSync(`/tmp/${fileBaseName}.class`); // Cleanup Java class file
+            }
+            if ((language === "c" || language === "cpp") && fs.existsSync(`/tmp/${fileBaseName}`)) {
+                fs.unlinkSync(`/tmp/${fileBaseName}`); // Cleanup C/C++ executable
+            }
         } catch (cleanupError) {
             console.error("Error during cleanup:", cleanupError.message);
         }
-
+        
         // Fetch the quiz and update user coding results
         const quiz = await Quiz.findById(quizId);
         if (!quiz) {
@@ -813,8 +815,9 @@ app.post("/api/compile", async (req, res) => {
 
         // Generate a unique filename to prevent conflicts
         const baseFileName = `main_${uuidv4().replace(/-/g, "_")}`;
-        const codeFile = `./${baseFileName}.${fileExtensions[language]}`;
-        const inputFile = `./${baseFileName}.input`;
+        const tmpDir = "/tmp"; // Use /tmp directory for temporary files
+        const codeFile = `${tmpDir}/${baseFileName}.${fileExtensions[language]}`;
+        const inputFile = `${tmpDir}/${baseFileName}.input`;
 
         let modifiedCode = code;
 
@@ -841,11 +844,11 @@ app.post("/api/compile", async (req, res) => {
 
         let command;
         if (language === "c") {
-            command = `${languageCommands[language]} ${codeFile} -o ${baseFileName} && ./${baseFileName} < ${inputFile}`;
+            command = `${languageCommands[language]} ${codeFile} -o ${tmpDir}/${baseFileName} && ${tmpDir}/${baseFileName} < ${inputFile}`;
         } else if (language === "cpp") {
-            command = `${languageCommands[language]} ${codeFile} -o ${baseFileName} && ./${baseFileName} < ${inputFile}`;
+            command = `${languageCommands[language]} ${codeFile} -o ${tmpDir}/${baseFileName} && ${tmpDir}/${baseFileName} < ${inputFile}`;
         } else if (language === "java") {
-            command = `${languageCommands[language].split(" && ")[0]} ${codeFile} && java ${baseFileName} < ${inputFile}`;
+            command = `javac -d ${tmpDir} ${codeFile} && java -cp ${tmpDir} ${baseFileName} < ${inputFile}`;
         } else {
             command = `${languageCommands[language]} ${codeFile} < ${inputFile}`;
         }
@@ -854,15 +857,15 @@ app.post("/api/compile", async (req, res) => {
         exec(command, (error, stdout, stderr) => {
             try {
                 // Cleanup: Delete files after execution
-                fs.unlinkSync(codeFile);
-                fs.unlinkSync(inputFile);
+                if (fs.existsSync(codeFile)) fs.unlinkSync(codeFile);
+                if (fs.existsSync(inputFile)) fs.unlinkSync(inputFile);
 
-                if (language === "c" || language === "cpp") {
-                    fs.unlinkSync(`./${baseFileName}`);
+                if ((language === "c" || language === "cpp") && fs.existsSync(`${tmpDir}/${baseFileName}`)) {
+                    fs.unlinkSync(`${tmpDir}/${baseFileName}`);
                 }
 
-                if (language === "java") {
-                    fs.unlinkSync(`./${baseFileName}.class`);
+                if (language === "java" && fs.existsSync(`${tmpDir}/${baseFileName}.class`)) {
+                    fs.unlinkSync(`${tmpDir}/${baseFileName}.class`);
                 }
             } catch (cleanupError) {
                 console.error("Error during cleanup:", cleanupError.message);
