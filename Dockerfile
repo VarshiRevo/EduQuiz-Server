@@ -1,9 +1,9 @@
-# Use the official Node.js image as the base image
-FROM node:18
+# Use a Node.js image with Debian (to support apt-get)
+FROM node:18-buster
 
-# Install required packages (OpenJDK, GCC, etc.)
+# Install required system dependencies (Java, GCC, G++)
 RUN apt-get update && apt-get install -y \
-    openjdk-11-jdk \
+    default-jdk \
     gcc \
     g++ \
     make \
