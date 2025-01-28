@@ -17,7 +17,7 @@ const { v4: uuidv4 } = require("uuid"); // Import the uuid function
 env.config();
 // Middleware
 app.use(cors({
-    origin: ['https://elevatequiz.netlify.app', 'http://localhost:5173','https://elevatequiz-coding.netlify.app'], // Allow your frontend URL
+    origin: ['https://elevatequiz.netlify.app', 'http://localhost:5173'], // Allow your frontend URL
     methods: ['GET', 'POST', 'PUT', 'DELETE'], // Add the methods you need
     credentials: true, // Allow credentials if required
 }));
@@ -670,7 +670,8 @@ app.post("/api/validate-code", async (req, res) => {
         };
 
         const fileBaseName = `main_${uuidv4().replace(/-/g, "_")}`;
-        const codeFile = `./${fileBaseName}.${fileExtensions[language]}`;
+        const codeFile = `/tmp/${fileBaseName}.${fileExtensions[language]}`;
+
 
         // Modify code for specific languages (e.g., Java class name adjustments)
         let modifiedCode = code;
@@ -692,7 +693,8 @@ app.post("/api/validate-code", async (req, res) => {
         const totalTestCases = privateTestCases.length;
 
         for (const testCase of privateTestCases) {
-            const inputFile = `./${fileBaseName}.input`;
+            const inputFile = `/tmp/${fileBaseName}.input`;
+
             fs.writeFileSync(inputFile, testCase.input.trim());
 
             let command;
@@ -728,8 +730,10 @@ app.post("/api/validate-code", async (req, res) => {
 
         try {
             fs.unlinkSync(codeFile); // Cleanup code file
-            if (language === "java") fs.unlinkSync(`./${fileBaseName}.class`);
-            if (language === "c" || language === "cpp") fs.unlinkSync(`./${fileBaseName}`);
+            if (language === "java") fs.unlinkSync(`/tmp/${fileBaseName}.class`);
+
+            if (language === "c" || language === "cpp") fs.unlinkSync(`/tmp/${fileBaseName}`);
+
         } catch (cleanupError) {
             console.error("Error during cleanup:", cleanupError.message);
         }
@@ -809,9 +813,8 @@ app.post("/api/compile", async (req, res) => {
 
         // Generate a unique filename to prevent conflicts
         const baseFileName = `main_${uuidv4().replace(/-/g, "_")}`;
-        const tmpDir = '/tmp'; // Use Render's temporary directory
-        const codeFile = `${tmpDir}/${baseFileName}.${fileExtensions[language]}`;
-        const inputFile = `${tmpDir}/${baseFileName}.input`;
+        const codeFile = `./${baseFileName}.${fileExtensions[language]}`;
+        const inputFile = `./${baseFileName}.input`;
 
         let modifiedCode = code;
 
@@ -920,18 +923,18 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
             if (!quizDate || !quizTime) {
                 return res.status(400).json({ error: "Hiring quiz requires quizDate and quizTime." });
             }
-
+        
             const quizTimeInSeconds = parseInt(quizTime, 10);
-
+        
             // Convert quizTime to HH:MM:SS format
             const hours = Math.floor(quizTimeInSeconds / 3600);
             const minutes = Math.floor((quizTimeInSeconds % 3600) / 60);
             const seconds = quizTimeInSeconds % 60;
             formattedTime = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-
+        
             // Calculate Start and End Time
             quizStartTime = moment.tz(`${quizDate} ${formattedTime}`, "YYYY-MM-DD HH:mm:ss", "Asia/Kolkata");
-
+        
             if (onlyCoding) {
                 // For onlyCoding, use the coding timer as the global timer
                 quizEndTime = quizStartTime.clone().add(codingTimer * 60, "seconds");
@@ -942,17 +945,17 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
                 // Default case for regular hiring quizzes
                 quizEndTime = quizStartTime.clone().add(quizDurationInSeconds, "seconds");
             }
-
+        
             const currentTime = moment().tz("Asia/Kolkata");
             console.log("Current Time:", currentTime.format());
             console.log("Quiz Start Time:", quizStartTime.format());
             console.log("Quiz End Time:", quizEndTime.format());
-
+        
             if (!quizStartTime.isValid() || !quizEndTime.isValid()) {
                 console.error("Invalid quiz start or end time");
                 return res.status(500).json({ error: "Failed to construct quiz start or end time." });
             }
-
+        
             // Ensure quiz accessibility
             if (currentTime.isBefore(quizStartTime)) {
                 return res.status(403).json({ error: "Quiz has not started yet." });
@@ -964,7 +967,7 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
                 return res.status(403).json({ error: "Quiz has ended." });
             }
         }
-
+        
 
         let codingTimers = null;
         if (quizType === "hiring" && (onlyCoding || codingWithQuiz)) {
@@ -979,7 +982,7 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
                 quiz.codingTimer && quiz.codingTimer > 0 ? quiz.codingTimer * 60 : 300 // Default to 5 mins per question
             );
         }
-
+    
 
 
         // Fetch user-specific details
@@ -1012,7 +1015,7 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
                 passPercentage,
                 codingQuestions,
                 codingTimers,
-                globalTimer: Math.max(remainingTime, 0),
+                globalTimer: Math.max(remainingTime, 0), 
                 codingResults: userResponse?.codingResults || {}, // Include coding results
                 quizDuration: quizType === "hiring" ? quizDurationInSeconds : null,
                 quizStartTime: quizStartTime ? quizStartTime.toISOString() : null,
@@ -1020,8 +1023,8 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
                 malpracticeLimit: malpracticeLimit || 3,
             });
         }
-
-
+        
+        
 
 
         // Handle quizzes with coding and regular questions
@@ -1285,14 +1288,14 @@ const validateQuiz = (req, res, next) => {
                 error: "Coding questions are not allowed for practice quizzes with sections when neither onlyCoding nor codingWithQuiz is enabled.",
             });
         }
-
+    
         // Assign default sections to coding questions if applicable
         if (codingWithQuiz || onlyCoding) {
             const validatedCodingQuestions = codingQuestions.map((cq) => ({
                 ...cq,
                 section: cq.section || "default", // Assign "default" if no section is specified
             }));
-
+    
             // Ensure all coding questions belong to valid sections
             if (validatedCodingQuestions.some((cq) => !sections.includes(cq.section))) {
                 return res.status(400).json({
@@ -1301,8 +1304,8 @@ const validateQuiz = (req, res, next) => {
             }
         }
     }
-
-
+    
+    
     if (codingQuestions.length > 0) {
         for (const [index, question] of codingQuestions.entries()) {
             if (
