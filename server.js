@@ -17,7 +17,7 @@ const { v4: uuidv4 } = require("uuid"); // Import the uuid function
 env.config();
 // Middleware
 app.use(cors({
-    origin: ['https://elevatequiz.netlify.app', 'http://localhost:5173','https://elevatequiz-coding.netlify.app'], // Allow your frontend URL
+    origin: ['https://elevatequiz.netlify.app', 'http://localhost:5173'], // Allow your frontend URL
     methods: ['GET', 'POST', 'PUT', 'DELETE'], // Add the methods you need
     credentials: true, // Allow credentials if required
 }));
@@ -380,6 +380,7 @@ app.post('/api/quizzes/:quizId/users/:username/update-results', async (req, res)
 
 
 
+
 app.post('/api/quizzes/:quizId/users/submit', async (req, res) => {
     const { quizId } = req.params;
     const { username, responses = [], codingResults = [], totalTimeSpent } = req.body;
@@ -501,13 +502,20 @@ app.get('/api/quizzes/:quizId/results', async (req, res) => {
             const userProfile = quiz.userProfiles.find(profile => profile.username === response.username);
             return {
                 username: response.username,
-                name: userProfile?.name || 'N/A',
-                email: userProfile?.email || 'N/A',
+                name: userProfile?.name || "N/A",
+                email: userProfile?.email || "N/A",
                 completed: response.completed,
                 isPass: response.isPass,
-                correctAnswers: response.correctAnswers,
-                percentage: response.percentage,
-                totalTimeSpent: response.totalTimeSpent,
+                correctAnswers: response.correctAnswers || 0,
+                percentage: response.percentage || 0,
+                totalTimeSpent: response.totalTimeSpent || 0,
+                nonCodingScore: response.nonCodingScore || 0,
+                codingScore: response.codingScore || 0,
+                totalScore: response.totalScore || 0,
+                nonCodingPercentage: response.nonCodingPercentage || 0,
+                codingPercentage: response.codingPercentage || 0,
+                overallPercentage: response.overallPercentage || 0,
+                submittedAt: response.submittedAt ? new Date(response.submittedAt).toISOString() : "N/A",
             };
         });
 
