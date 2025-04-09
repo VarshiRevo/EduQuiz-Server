@@ -202,6 +202,22 @@ app.post('/api/quizzes/:quizId/users/:username/save-responses', async (req, res)
 });
 
 
+// Add this function before the quiz submission endpoint
+const transformQuizData = (quiz) => {
+    if (!quiz.questionsBySection && quiz.questions) {
+        // Transform questions into sections
+        const questionsBySection = {};
+        quiz.questions.forEach(question => {
+            if (!questionsBySection[question.section]) {
+                questionsBySection[question.section] = [];
+            }
+            questionsBySection[question.section].push(question);
+        });
+        quiz.questionsBySection = questionsBySection;
+    }
+    return quiz;
+};
+
 app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
     const { quizId, username } = req.params;
     const { responses = [], codingResponses = [], timeSpent = 0 } = req.body;
@@ -213,13 +229,17 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
             return res.status(404).json({ message: 'Quiz not found' });
         }
 
+        // Transform quiz data if needed
+        transformQuizData(quiz);
+
         const userResponse = quiz.userResponses.find((response) => response.username === username);
         if (!userResponse) {
             console.error("Debug: User response not found for username:", username);
             return res.status(404).json({ message: 'User not found for this quiz.' });
         }
 
-        console.log("Debug: Responses received:", responses);
+        console.log("Debug: Quiz Structure:", JSON.stringify(quiz.questionsBySection, null, 2));
+        console.log("Debug: Responses received:", JSON.stringify(responses, null, 2));
 
         // Initialize scores
         let nonCodingScore = 0;
@@ -229,13 +249,72 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
 
         // Calculate non-coding score
         if (!quiz.onlyCoding) {
-            const totalNonCodingQuestions = quiz.questions.length;
+            console.log("\nDebug: Quiz Structure Validation:");
+            console.log("Debug: Quiz Object:", JSON.stringify(quiz, null, 2));
+            
+            // Validate quiz structure
+            if (!quiz.questionsBySection && !quiz.questions) {
+                console.error("Debug: Invalid quiz structure - no questions found");
+                return res.status(500).json({ 
+                    error: "Invalid quiz structure", 
+                    details: "Quiz does not contain any questions" 
+                });
+            }
+
+            // Get all questions from all sections
+            const allQuestions = quiz.questionsBySection ? 
+                Object.values(quiz.questionsBySection).flat() : 
+                quiz.questions;
+            
+            if (!allQuestions || allQuestions.length === 0) {
+                console.error("Debug: No questions found in quiz");
+                return res.status(500).json({ 
+                    error: "Invalid quiz structure", 
+                    details: "No questions found in quiz" 
+                });
+            }
+
+            const totalNonCodingQuestions = allQuestions.length;
             let correctAnswers = 0;
 
-            responses.forEach((response) => {
-                const question = quiz.questions[response.questionIndex];
-                if (question && parseInt(response.answer) === parseInt(question.correctOption)) {
-                    correctAnswers++;
+            console.log("\nDebug: Quiz Questions Structure:");
+            console.log("Debug: Questions by Section:", JSON.stringify(quiz.questionsBySection, null, 2));
+            console.log("Debug: Total Questions Count:", totalNonCodingQuestions);
+
+            responses.forEach((response, index) => {
+                try {
+                    console.log(`\nDebug: Processing Response ${index + 1}:`);
+                    console.log("Debug: Response Data:", JSON.stringify(response, null, 2));
+                    
+                    // Find the question in the correct section
+                    const sectionQuestions = quiz.questionsBySection ? 
+                        (quiz.questionsBySection[response.section] || []) : 
+                        quiz.questions;
+                    
+                    if (!sectionQuestions) {
+                        console.error(`Debug: No questions found for section: ${response.section}`);
+                        return;
+                    }
+
+                    const question = sectionQuestions[response.questionIndex];
+                    
+                    if (!question) {
+                        console.error(`Debug: Question not found at index ${response.questionIndex} in section ${response.section}`);
+                        return;
+                    }
+
+                    console.log("Debug: Found Question:", JSON.stringify(question, null, 2));
+                    console.log("Debug: User Answer:", response.answer);
+                    console.log("Debug: Correct Answer:", question?.correctOption);
+
+                    if (parseInt(response.answer) === parseInt(question.correctOption)) {
+                        correctAnswers++;
+                        console.log("Debug: Answer is CORRECT");
+                    } else {
+                        console.log("Debug: Answer is INCORRECT");
+                    }
+                } catch (error) {
+                    console.error(`Debug: Error processing response ${index + 1}:`, error);
                 }
             });
 
@@ -244,6 +323,9 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
                 ? (correctAnswers / totalNonCodingQuestions) * 100 
                 : 0;
 
+            console.log("\nDebug: Score Calculation Summary:");
+            console.log("Debug: Total Non-Coding Questions:", totalNonCodingQuestions);
+            console.log("Debug: Correct Answers:", correctAnswers);
             console.log("Debug: Non-Coding Score:", nonCodingScore);
             console.log("Debug: Non-Coding Percentage:", nonCodingPercentage);
         }
