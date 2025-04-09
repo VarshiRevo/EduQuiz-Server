@@ -204,7 +204,7 @@ app.post('/api/quizzes/:quizId/users/:username/save-responses', async (req, res)
 
 app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
     const { quizId, username } = req.params;
-    const { responses = [], codingResults = {}, totalTimeSpent = 0 } = req.body;
+    const { responses = [], codingResponses = [], timeSpent = 0 } = req.body;
 
     try {
         const quiz = await Quiz.findById(quizId);
@@ -225,73 +225,69 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
         let nonCodingScore = 0;
         let totalPassedTestCases = 0;
         let totalTestCases = 0;
-        let nonCodingPercentage = 0; // Ensure it is defined for all cases
+        let nonCodingPercentage = 0;
 
+        // Calculate non-coding score
         if (!quiz.onlyCoding) {
-            // Match responses to non-coding questions and calculate score
+            const totalNonCodingQuestions = quiz.questions.length;
+            let correctAnswers = 0;
+
             responses.forEach((response) => {
                 const question = quiz.questions[response.questionIndex];
-                if (question) {
-                    console.log(`Debug: Question Index: ${response.questionIndex}`);
-                    console.log(`Debug: User Answer: ${response.answer}`);
-                    console.log(`Debug: Correct Option: ${question.correctOption}`);
-
-                    if (parseInt(response.answer) === parseInt(question.correctOption)) {
-                        nonCodingScore++;
-                        console.log("Debug: Answer is correct.");
-                    } else {
-                        console.log("Debug: Answer is incorrect.");
-                    }
-                } else {
-                    console.log(`Debug: Question not found for index ${response.questionIndex}`);
+                if (question && parseInt(response.answer) === parseInt(question.correctOption)) {
+                    correctAnswers++;
                 }
             });
 
-            console.log("Debug: Non-Coding Correct Answers:", nonCodingScore);
-            console.log("Debug: Non-Coding Total Questions:", quiz.questionsToSet);
-
-            // Ensure questionsToSet is valid and calculate percentage
-            nonCodingPercentage = quiz.questionsToSet && quiz.questionsToSet > 0
-                ? (nonCodingScore / quiz.questionsToSet) * 100
+            nonCodingScore = correctAnswers;
+            nonCodingPercentage = totalNonCodingQuestions > 0 
+                ? (correctAnswers / totalNonCodingQuestions) * 100 
                 : 0;
 
             console.log("Debug: Non-Coding Score:", nonCodingScore);
             console.log("Debug: Non-Coding Percentage:", nonCodingPercentage);
         }
 
-        // Handle coding results
-        const storedCodingResults = userResponse.codingResults || {};
-        Object.entries(storedCodingResults).forEach(([key, result]) => {
-            totalPassedTestCases += result.passedTestCases || 0;
-            totalTestCases += result.totalTestCases || 0;
-        });
+        // Calculate coding score
+        let codingPercentage = 0;
+        if (quiz.codingQuestions && quiz.codingQuestions.length > 0) {
+            const codingResults = userResponse.codingResults || {};
+            let totalPassed = 0;
+            let totalCases = 0;
 
-        // Merge new coding results
-        Object.entries(codingResults).forEach(([key, result]) => {
-            if (!storedCodingResults[key]) {
-                storedCodingResults[key] = result;
-            }
-            totalPassedTestCases += result.passedTestCases || 0;
-            totalTestCases += result.totalTestCases || 0;
-        });
+            // Calculate from stored results
+            Object.values(codingResults).forEach(result => {
+                totalPassed += result.passedTestCases || 0;
+                totalCases += result.totalTestCases || 0;
+            });
 
-        console.log("Debug: Total Passed Test Cases:", totalPassedTestCases);
-        console.log("Debug: Total Test Cases:", totalTestCases);
+            // Calculate from new submissions
+            codingResponses.forEach(response => {
+                const question = quiz.codingQuestions[response.questionIndex];
+                if (question && question.privateTestCases) {
+                    totalCases += question.privateTestCases.length;
+                    // Assuming each test case is worth 1 point
+                    totalPassed += response.passedTestCases || 0;
+                }
+            });
 
-        userResponse.codingResults = storedCodingResults; // Update coding results immediately
+            totalPassedTestCases = totalPassed;
+            totalTestCases = totalCases;
+            codingPercentage = totalCases > 0 ? (totalPassed / totalCases) * 100 : 0;
 
-        const codingPercentage = totalTestCases > 0
-            ? (totalPassedTestCases / totalTestCases) * 100
-            : 0;
-
-        console.log("Debug: Calculated Coding Percentage:", codingPercentage);
+            console.log("Debug: Coding Score:", totalPassedTestCases);
+            console.log("Debug: Coding Percentage:", codingPercentage);
+        }
 
         // Calculate overall percentage
-        const overallPercentage = quiz.onlyCoding
-            ? codingPercentage
-            : quiz.codingWithQuiz
-                ? (nonCodingPercentage + codingPercentage) / 2
-                : nonCodingPercentage || 0;
+        const totalQuestions = (!quiz.onlyCoding ? quiz.questions.length : 0) + 
+                             (quiz.codingQuestions ? quiz.codingQuestions.length : 0);
+        
+        const overallPercentage = quiz.onlyCoding 
+            ? codingPercentage 
+            : quiz.codingWithQuiz 
+                ? ((nonCodingScore + totalPassedTestCases) / totalQuestions) * 100
+                : nonCodingPercentage;
 
         console.log("Debug: Overall Percentage:", overallPercentage);
 
@@ -300,11 +296,11 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
         // Update user response
         userResponse.completed = true;
         userResponse.submittedAt = new Date();
-        userResponse.totalTimeSpent = totalTimeSpent;
-        userResponse.responses = responses; // Save all responses
-        userResponse.nonCodingScore = Number(nonCodingScore) || 0;
-        userResponse.codingScore = Number(totalPassedTestCases) || 0;
-        userResponse.totalScore = Number(nonCodingScore + totalPassedTestCases) || 0;
+        userResponse.totalTimeSpent = timeSpent;
+        userResponse.responses = responses;
+        userResponse.nonCodingScore = nonCodingScore;
+        userResponse.codingScore = totalPassedTestCases;
+        userResponse.totalScore = nonCodingScore + totalPassedTestCases;
         userResponse.nonCodingPercentage = nonCodingPercentage;
         userResponse.codingPercentage = codingPercentage;
         userResponse.overallPercentage = overallPercentage;
