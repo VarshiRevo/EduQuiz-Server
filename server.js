@@ -78,7 +78,17 @@ app.post('/api/login', async (req, res) => {
             const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 
             const quizStartTime = moment.tz(`${quizDate} ${formattedTime}`, 'YYYY-MM-DD HH:mm:ss', 'Asia/Kolkata');
-            const quizEndTime = quizStartTime.clone().add(quiz.quizDuration, 'minutes');
+            
+            // MODIFIED: For onlyCoding quizzes, keep the original behavior
+            // For other hiring quizzes, set a 24-hour access window
+            let accessEndTime;
+            if (quiz.onlyCoding) {
+                accessEndTime = quizStartTime.clone().add(quiz.codingTimer * 60, 'seconds');
+            } else {
+                // 24-hour access window for regular hiring and codingWithQuiz
+                accessEndTime = quizStartTime.clone().add(24, 'hours');
+            }
+            
             const loginAccessStartTime = quizStartTime.clone().subtract(10, 'minutes');
             const currentTime = moment().tz('Asia/Kolkata');
 
@@ -87,9 +97,9 @@ app.post('/api/login', async (req, res) => {
                     error: 'The quiz is not yet accessible. Login allowed 10 minutes before the quiz start time.',
                 });
             }
-            if (currentTime.isAfter(quizEndTime)) {
+            if (currentTime.isAfter(accessEndTime)) {
                 return res.status(403).json({
-                    error: 'The quiz has already ended.',
+                    error: 'The quiz access window has ended.',
                 });
             }
         }
@@ -121,7 +131,6 @@ app.post('/api/login', async (req, res) => {
         res.status(500).json({ error: 'An error occurred while logging in' });
     }
 });
-
 
 
 
@@ -203,20 +212,35 @@ app.post('/api/quizzes/:quizId/users/:username/save-responses', async (req, res)
 
 
 // Add this function before the quiz submission endpoint
+// In your quiz submission route handler (app.post('/api/quizzes/:quizId/users/:username/submit')),
+// Add this code right after you fetch the quiz:
+
+// Reproduce the same shuffling logic that was used when fetching the quiz
 const transformQuizData = (quiz) => {
-    if (!quiz.questionsBySection && quiz.questions) {
-        // Transform questions into sections
-        const questionsBySection = {};
-        quiz.questions.forEach(question => {
-            if (!questionsBySection[question.section]) {
-                questionsBySection[question.section] = [];
-            }
-            questionsBySection[question.section].push(question);
-        });
-        quiz.questionsBySection = questionsBySection;
-    }
-    return quiz;
-};
+    // Shuffle questions using seeded random function based on username
+    let seed = username.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const seededRandom = () => {
+        const x = Math.sin(seed++) * 10000;
+        return x - Math.floor(x);
+    };
+
+    // Skip if questionsBySection is already populated
+    if (quiz.questionsBySection) return;
+
+    const shuffledQuestions = quiz.questions
+        .map((question) => ({ question, sortKey: seededRandom() }))
+        .sort((a, b) => a.sortKey - b.sortKey)
+        .map(({ question }) => question);
+
+    const selectedQuestions = shuffledQuestions.slice(0, quiz.questionsToSet || quiz.questions.length);
+
+    // Group questions by sections
+    const sections = [...new Set(selectedQuestions.map((q) => q.section))];
+    quiz.questionsBySection = sections.reduce((acc, section) => {
+        acc[section] = selectedQuestions.filter((q) => q.section === section);
+        return acc;
+    }, {});
+}
 
 app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
     const { quizId, username } = req.params;
@@ -225,21 +249,13 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
     try {
         const quiz = await Quiz.findById(quizId);
         if (!quiz) {
-            console.error("Debug: Quiz not found");
             return res.status(404).json({ message: 'Quiz not found' });
         }
 
-        // Transform quiz data if needed
-        transformQuizData(quiz);
-
         const userResponse = quiz.userResponses.find((response) => response.username === username);
         if (!userResponse) {
-            console.error("Debug: User response not found for username:", username);
             return res.status(404).json({ message: 'User not found for this quiz.' });
         }
-
-        console.log("Debug: Quiz Structure:", JSON.stringify(quiz.questionsBySection, null, 2));
-        console.log("Debug: Responses received:", JSON.stringify(responses, null, 2));
 
         // Initialize scores
         let nonCodingScore = 0;
@@ -248,86 +264,48 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
         let nonCodingPercentage = 0;
 
         // Calculate non-coding score
-        if (!quiz.onlyCoding) {
-            console.log("\nDebug: Quiz Structure Validation:");
-            console.log("Debug: Quiz Object:", JSON.stringify(quiz, null, 2));
-            
-            // Validate quiz structure
-            if (!quiz.questionsBySection && !quiz.questions) {
-                console.error("Debug: Invalid quiz structure - no questions found");
-                return res.status(500).json({ 
-                    error: "Invalid quiz structure", 
-                    details: "Quiz does not contain any questions" 
-                });
-            }
-
-            // Get all questions from all sections
-            const allQuestions = quiz.questionsBySection ? 
-                Object.values(quiz.questionsBySection).flat() : 
-                quiz.questions;
-            
-            if (!allQuestions || allQuestions.length === 0) {
-                console.error("Debug: No questions found in quiz");
-                return res.status(500).json({ 
-                    error: "Invalid quiz structure", 
-                    details: "No questions found in quiz" 
-                });
-            }
-
-            const totalNonCodingQuestions = allQuestions.length;
+        if (!quiz.onlyCoding && responses && responses.length > 0) {
+            const totalNonCodingQuestions = quiz.questionsToSet || quiz.questions.length;
             let correctAnswers = 0;
 
-            console.log("\nDebug: Quiz Questions Structure:");
-            console.log("Debug: Questions by Section:", JSON.stringify(quiz.questionsBySection, null, 2));
-            console.log("Debug: Total Questions Count:", totalNonCodingQuestions);
+            // Group questions by section
+            const questionsBySection = {};
+            quiz.questions.forEach(question => {
+                if (!questionsBySection[question.section]) {
+                    questionsBySection[question.section] = [];
+                }
+                questionsBySection[question.section].push(question);
+            });
 
-            responses.forEach((response, index) => {
-                try {
-                    console.log(`\nDebug: Processing Response ${index + 1}:`);
-                    console.log("Debug: Response Data:", JSON.stringify(response, null, 2));
-                    
-                    // Find the question in the correct section
-                    const sectionQuestions = quiz.questionsBySection ? 
-                        (quiz.questionsBySection[response.section] || []) : 
-                        quiz.questions;
-                    
-                    if (!sectionQuestions) {
-                        console.error(`Debug: No questions found for section: ${response.section}`);
-                        return;
-                    }
+            // Process each response
+            responses.forEach(response => {
+                const sectionQuestions = questionsBySection[response.section];
+                if (!sectionQuestions) return;
 
-                    const question = sectionQuestions[response.questionIndex];
-                    
-                    if (!question) {
-                        console.error(`Debug: Question not found at index ${response.questionIndex} in section ${response.section}`);
-                        return;
-                    }
+                const question = sectionQuestions[response.questionIndex];
+                if (!question) return;
 
-                    console.log("Debug: Found Question:", JSON.stringify(question, null, 2));
-                    console.log("Debug: User Answer:", response.answer);
-                    console.log("Debug: Correct Answer:", question?.correctOption);
+                const userAnswer = parseInt(response.answer);
+                const correctAnswer = parseInt(question.correctOption);
 
-                    if (parseInt(response.answer) === parseInt(question.correctOption)) {
-                        correctAnswers++;
-                        console.log("Debug: Answer is CORRECT");
-                    } else {
-                        console.log("Debug: Answer is INCORRECT");
-                    }
-                } catch (error) {
-                    console.error(`Debug: Error processing response ${index + 1}:`, error);
+                console.log(`Debug: Checking answer for question ${response.questionIndex} in section ${response.section}:`);
+                console.log(`User answer: ${userAnswer}, Correct answer: ${correctAnswer}`);
+
+                if (!isNaN(correctAnswer) && userAnswer === correctAnswer) {
+                    correctAnswers++;
                 }
             });
 
             nonCodingScore = correctAnswers;
-            nonCodingPercentage = totalNonCodingQuestions > 0 
-                ? (correctAnswers / totalNonCodingQuestions) * 100 
+            nonCodingPercentage = totalNonCodingQuestions > 0
+                ? (correctAnswers / totalNonCodingQuestions) * 100
                 : 0;
 
-            console.log("\nDebug: Score Calculation Summary:");
-            console.log("Debug: Total Non-Coding Questions:", totalNonCodingQuestions);
-            console.log("Debug: Correct Answers:", correctAnswers);
-            console.log("Debug: Non-Coding Score:", nonCodingScore);
-            console.log("Debug: Non-Coding Percentage:", nonCodingPercentage);
+            console.log("Debug: Non-coding score calculation:", {
+                correctAnswers,
+                totalNonCodingQuestions,
+                nonCodingPercentage
+            });
         }
 
         // Calculate coding score
@@ -339,8 +317,10 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
 
             // Calculate from stored results
             Object.values(codingResults).forEach(result => {
-                totalPassed += result.passedTestCases || 0;
-                totalCases += result.totalTestCases || 0;
+                if (result && typeof result.passedTestCases === 'number' && typeof result.totalTestCases === 'number') {
+                    totalPassed += result.passedTestCases;
+                    totalCases += result.totalTestCases;
+                }
             });
 
             // Calculate from new submissions
@@ -348,7 +328,6 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
                 const question = quiz.codingQuestions[response.questionIndex];
                 if (question && question.privateTestCases) {
                     totalCases += question.privateTestCases.length;
-                    // Assuming each test case is worth 1 point
                     totalPassed += response.passedTestCases || 0;
                 }
             });
@@ -356,22 +335,17 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
             totalPassedTestCases = totalPassed;
             totalTestCases = totalCases;
             codingPercentage = totalCases > 0 ? (totalPassed / totalCases) * 100 : 0;
-
-            console.log("Debug: Coding Score:", totalPassedTestCases);
-            console.log("Debug: Coding Percentage:", codingPercentage);
         }
 
         // Calculate overall percentage
-        const totalQuestions = (!quiz.onlyCoding ? quiz.questions.length : 0) + 
-                             (quiz.codingQuestions ? quiz.codingQuestions.length : 0);
-        
-        const overallPercentage = quiz.onlyCoding 
-            ? codingPercentage 
-            : quiz.codingWithQuiz 
-                ? ((nonCodingScore + totalPassedTestCases) / totalQuestions) * 100
-                : nonCodingPercentage;
+        const totalQuestions = (!quiz.onlyCoding ? (quiz.questionsToSet || quiz.questions.length) : 0) +
+            (quiz.codingQuestions ? quiz.codingQuestions.length : 0);
 
-        console.log("Debug: Overall Percentage:", overallPercentage);
+        const overallPercentage = quiz.onlyCoding
+            ? codingPercentage
+            : quiz.codingWithQuiz
+                ? ((nonCodingPercentage + codingPercentage) / 2)
+                : nonCodingPercentage;
 
         const isPass = overallPercentage >= quiz.passPercentage;
 
@@ -388,6 +362,7 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
         userResponse.overallPercentage = overallPercentage;
         userResponse.isPass = isPass;
 
+        // Save the updated quiz
         await quiz.save();
 
         res.status(200).json({
@@ -673,6 +648,7 @@ app.get('/api/quizzes/:quizId', async (req, res) => {
             quizStartTime = moment.tz(`${quiz.quizDate} ${formattedTime}`, "YYYY-MM-DD HH:mm:ss", "Asia/Kolkata");
             const loginAccessStartTime = quizStartTime.clone().subtract(10, 'minutes'); // 10 minutes early access
             quizEndTime = quizStartTime.clone().add(quiz.quizDuration, 'minutes');
+            const twentyFourHoursAfterEnd = quizEndTime.clone().add(24, 'hours');
 
             // Validate current time
             const currentTime = moment().tz("Asia/Kolkata");
@@ -683,9 +659,12 @@ app.get('/api/quizzes/:quizId', async (req, res) => {
                 });
             }
 
-            if (currentTime.isAfter(quizEndTime)) {
-                console.warn(`Timer expired for quizId: ${quizId}, submitting automatically.`);
-                return res.status(200).json({ message: 'Quiz automatically submitted as the timer expired.' });
+            if (currentTime.isAfter(twentyFourHoursAfterEnd)) {
+                console.warn(`Quiz expired (24 hours after end) for quizId: ${quizId}`);
+                return res.status(200).json({ 
+                    message: 'Quiz has expired (24 hours after end)',
+                    isExpired: true
+                });
             }
         } else if (quiz.quizType === 'practice') {
             // For practice quizzes, no time restrictions
@@ -694,11 +673,17 @@ app.get('/api/quizzes/:quizId', async (req, res) => {
         }
 
         // Calculate sections and questions by section
-        const sections = [...new Set(quiz.questions.map((q) => q.section || 'default'))]; // Get unique sections
+        const sections = [...new Set(quiz.questions.map((q) => q.section || 'default'))];
         const questionsBySection = sections.reduce((acc, section) => {
             acc[section] = quiz.questions.filter((q) => q.section === section);
             return acc;
         }, {});
+
+        // Add coding section if there are coding questions
+        if (quiz.codingQuestions && quiz.codingQuestions.length > 0) {
+            sections.push('coding');
+            questionsBySection['coding'] = quiz.codingQuestions;
+        }
 
         // Respond with quiz details
         res.json({
@@ -706,14 +691,14 @@ app.get('/api/quizzes/:quizId', async (req, res) => {
             quizDescription: quiz.quizDescription,
             quizType: quiz.quizType,
             questionsToSet: quiz.questionsToSet,
-            timeLimit: quiz.quizDuration || "Not specified", // Default value
+            timeLimit: quiz.quizDuration || "Not specified",
             quizStartTime: quizStartTime ? quizStartTime.toISOString() : null,
             quizEndTime: quizEndTime ? quizEndTime.toISOString() : null,
             bannerImageUrl: quiz.bannerImageUrl,
-            questions: quiz.questions || [], // Default to empty array if questions are not provided
-            sections, // Include the sections
-            questionsBySection, // Include questions grouped by sections
-
+            questions: quiz.questions || [],
+            sections,
+            questionsBySection,
+            isExpired: false
         });
 
     } catch (error) {
@@ -825,7 +810,7 @@ app.post("/api/validate-code", async (req, res) => {
         } catch (cleanupError) {
             console.error("Error during cleanup:", cleanupError.message);
         }
-        
+
         // Fetch the quiz and update user coding results
         const quiz = await Quiz.findById(quizId);
         if (!quiz) {
@@ -1012,51 +997,54 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
             if (!quizDate || !quizTime) {
                 return res.status(400).json({ error: "Hiring quiz requires quizDate and quizTime." });
             }
-        
+
             const quizTimeInSeconds = parseInt(quizTime, 10);
-        
+
             // Convert quizTime to HH:MM:SS format
             const hours = Math.floor(quizTimeInSeconds / 3600);
             const minutes = Math.floor((quizTimeInSeconds % 3600) / 60);
             const seconds = quizTimeInSeconds % 60;
             formattedTime = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-        
-            // Calculate Start and End Time
+
+            // Calculate Admin-set Start Time
             quizStartTime = moment.tz(`${quizDate} ${formattedTime}`, "YYYY-MM-DD HH:mm:ss", "Asia/Kolkata");
-        
+            
+            // MODIFIED: For non-onlyCoding quizzes, set the window end time to 24 hours after start time
+            // This is the window during which users can access the quiz
+            const windowEndTime = quizStartTime.clone().add(24, "hours");
+            
             if (onlyCoding) {
-                // For onlyCoding, use the coding timer as the global timer
+                // For onlyCoding, maintain original behavior with fixed start/end times
                 quizEndTime = quizStartTime.clone().add(codingTimer * 60, "seconds");
-            } else if (codingWithQuiz) {
-                // For codingWithQuiz, quiz duration applies to the quiz part
-                quizEndTime = quizStartTime.clone().add(quizDurationInSeconds, "seconds");
             } else {
-                // Default case for regular hiring quizzes
-                quizEndTime = quizStartTime.clone().add(quizDurationInSeconds, "seconds");
+                // For regular hiring or codingWithQuiz, we're just validating the 24-hour window
+                // The actual quiz duration will be handled client-side once they start
+                quizEndTime = windowEndTime;
             }
-        
+
             const currentTime = moment().tz("Asia/Kolkata");
             console.log("Current Time:", currentTime.format());
             console.log("Quiz Start Time:", quizStartTime.format());
             console.log("Quiz End Time:", quizEndTime.format());
-        
+
             if (!quizStartTime.isValid() || !quizEndTime.isValid()) {
                 console.error("Invalid quiz start or end time");
                 return res.status(500).json({ error: "Failed to construct quiz start or end time." });
             }
-        
-            // Ensure quiz accessibility
+
+            // MODIFIED: Check if the current time is within the 24-hour window
             if (currentTime.isBefore(quizStartTime)) {
                 return res.status(403).json({ error: "Quiz has not started yet." });
-            } else if (currentTime.isAfter(quizEndTime)) {
-                if (onlyCoding || codingWithQuiz) {
-                    console.warn(`Timer expired for quizId: ${quizId}, transitioning to auto-submit.`);
-                    return res.status(200).json({ message: "Quiz automatically submitted as the timer expired." });
-                }
-                return res.status(403).json({ error: "Quiz has ended." });
+            } else if (currentTime.isAfter(windowEndTime)) {
+                return res.status(403).json({ error: "Quiz access window has ended." });
+            }
+            
+            // For onlyCoding quizzes we still need to check if they're within the exact time window
+            if (onlyCoding && currentTime.isAfter(quizEndTime)) {
+                console.warn(`Timer expired for quizId: ${quizId}, transitioning to auto-submit.`);
+                return res.status(200).json({ message: "Quiz automatically submitted as the timer expired." });
             }
         }
-        
 
         let codingTimers = null;
         if (quizType === "hiring" && (onlyCoding || codingWithQuiz)) {
@@ -1071,8 +1059,6 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
                 quiz.codingTimer && quiz.codingTimer > 0 ? quiz.codingTimer * 60 : 300 // Default to 5 mins per question
             );
         }
-    
-
 
         // Fetch user-specific details
         const userResponse = quiz.userResponses.find((response) => response.username === username);
@@ -1104,7 +1090,7 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
                 passPercentage,
                 codingQuestions,
                 codingTimers,
-                globalTimer: Math.max(remainingTime, 0), 
+                globalTimer: Math.max(remainingTime, 0),
                 codingResults: userResponse?.codingResults || {}, // Include coding results
                 quizDuration: quizType === "hiring" ? quizDurationInSeconds : null,
                 quizStartTime: quizStartTime ? quizStartTime.toISOString() : null,
@@ -1112,9 +1098,6 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
                 malpracticeLimit: malpracticeLimit || 3,
             });
         }
-        
-        
-
 
         // Handle quizzes with coding and regular questions
         if (codingWithQuiz || (!onlyCoding && !codingWithQuiz)) {
@@ -1143,6 +1126,8 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
                 return acc;
             }, {});
 
+            // MODIFIED: For non-onlyCoding hiring quizzes, send the full quiz duration instead of precomputed end time
+            // This allows the client to start the timer when the user enters the quiz
             return res.json({
                 quizTitle,
                 quizDescription,
@@ -1150,9 +1135,10 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
                 passPercentage,
                 codingWithQuiz,
                 onlyCoding,
-                quizDuration: quizType === "hiring" ? quizDurationInSeconds : null,
-                quizStartTime: quizStartTime ? quizStartTime.toISOString() : null,
-                quizEndTime: quizEndTime ? quizEndTime.toISOString() : null,
+                quizDuration: quizDurationInSeconds, // Always send the full duration in seconds
+                accessWindowStart: quizStartTime ? quizStartTime.toISOString() : null,
+                accessWindowEnd: quizEndTime ? quizEndTime.toISOString() : null,
+                // No longer sending specific end time - client will calculate based on when user starts
                 questionTimer: quizType === "practice" ? questionTimer : null,
                 quizDate: quizDate || null,
                 quizTime: formattedTime || null,
@@ -1377,14 +1363,14 @@ const validateQuiz = (req, res, next) => {
                 error: "Coding questions are not allowed for practice quizzes with sections when neither onlyCoding nor codingWithQuiz is enabled.",
             });
         }
-    
+
         // Assign default sections to coding questions if applicable
         if (codingWithQuiz || onlyCoding) {
             const validatedCodingQuestions = codingQuestions.map((cq) => ({
                 ...cq,
                 section: cq.section || "default", // Assign "default" if no section is specified
             }));
-    
+
             // Ensure all coding questions belong to valid sections
             if (validatedCodingQuestions.some((cq) => !sections.includes(cq.section))) {
                 return res.status(400).json({
@@ -1393,8 +1379,8 @@ const validateQuiz = (req, res, next) => {
             }
         }
     }
-    
-    
+
+
     if (codingQuestions.length > 0) {
         for (const [index, question] of codingQuestions.entries()) {
             if (
