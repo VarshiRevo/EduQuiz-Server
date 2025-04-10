@@ -282,16 +282,16 @@ app.post('/api/quizzes/:quizId/users/:username/submit', async (req, res) => {
                 const sectionQuestions = questionsBySection[response.section];
                 if (!sectionQuestions) return;
 
-                const question = quiz.questions[response.questionIndex]; 
+                const question = sectionQuestions[response.questionIndex];
                 if (!question) return;
 
-                const userAnswer = String(response.answer).trim();
-    const correctAnswer = String(question.correctOption).trim();
+                const userAnswer = parseInt(response.answer);
+                const correctAnswer = parseInt(question.correctOption);
 
                 console.log(`Debug: Checking answer for question ${response.questionIndex} in section ${response.section}:`);
                 console.log(`User answer: ${userAnswer}, Correct answer: ${correctAnswer}`);
 
-                if (userAnswer === correctAnswer) {
+                if (!isNaN(correctAnswer) && userAnswer === correctAnswer) {
                     correctAnswers++;
                 }
             });
@@ -1117,12 +1117,7 @@ app.get('/api/quizzes/:quizId/users/:username', async (req, res) => {
                 .sort((a, b) => a.sortKey - b.sortKey)
                 .map(({ question }) => question);
 
-           // Modify this part in the GET endpoint
-const selectedQuestions = shuffledQuestions.slice(0, questionsToSet).map((q, clientIndex) => ({
-    ...q,
-    clientIndex, // Add this to track the frontend index
-    originalIndex: questions.findIndex(oq => oq._id.toString() === q._id.toString()) // Store original index
-}));
+            const selectedQuestions = shuffledQuestions.slice(0, questionsToSet);
 
             // Group questions by sections
             const sections = [...new Set(selectedQuestions.map((q) => q.section))];
