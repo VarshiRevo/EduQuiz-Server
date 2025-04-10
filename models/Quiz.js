@@ -57,11 +57,11 @@ const userProfileSchema = new mongoose.Schema({
   username: { type: String },  // The username of the user
   name: { type: String },  // User's full name
   email: { type: String },  // User's email
-  phone: { type: String },  // Phone number
+  phone: { type: Number },  // Phone number
   rollNumber: { type: String },  // Roll number or student ID
   department: { type: String },  // Department of the user
   graduationYear: { type: String },  // Graduation year
-  cgpa: { type: String },  // CGPA
+  cgpa: { type: Number },  // CGPA
   address: { type: String },  // Address of the user
   skills: { type: String },  // Skills of the user
   linkedin: { type: String },  // Optional LinkedIn URL
